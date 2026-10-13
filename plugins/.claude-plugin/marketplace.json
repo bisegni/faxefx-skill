@@ -1,0 +1,11 @@
+{
+  "name": "axefx-local",
+  "owner": {"name": "bisegni"},
+  "plugins": [
+    {
+      "name": "axefx",
+      "source": "./axefx",
+      "description": "Design and edit Axe-Fx III presets through the repository-local Python CLI."
+    }
+  ]
+}
