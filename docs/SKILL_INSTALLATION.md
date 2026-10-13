@@ -101,21 +101,35 @@ Directory, choose **Axe-Fx III Local**, and install **Axe-Fx III Preset Assistan
 The marketplace file is `.agents/plugins/marketplace.json`; see the official
 [local marketplace instructions](https://developers.openai.com/plugins/build/plugins).
 
-For **Claude Code**, load the plugin for one session from this checkout:
+For **Claude Code**, register the local marketplace and install the plugin for
+your user account from this checkout:
+
+```sh
+claude plugin marketplace add ./plugins --scope user
+claude plugin install axefx@axefx-local --scope user
+```
+
+The marketplace is `plugins/.claude-plugin/marketplace.json`. It points directly
+to `plugins/axefx`; see the official
+[Claude marketplace instructions](https://code.claude.com/docs/en/plugin-marketplaces).
+To load the plugin for only one session instead:
 
 ```sh
 claude --plugin-dir ./plugins/axefx
 ```
 
-Then invoke `/axefx:axefx-preset`. This uses Claude Code's
+Start a new session or run `/reload-plugins`, then invoke `/axefx:axefx-preset`.
+The session-only option uses Claude Code's
 [local plugin loading](https://code.claude.com/docs/en/plugins); no marketplace
 installation is needed. The plugin contains instructions only and still needs
 this checkout and its Python environment. There is no bundled application, CLI
 wheel or MCP server. These entrypoints support local Claude Code sessions; they
 do not give browser/cloud Claude access to your computer's USB device.
 
-Command syntax is checked against Codex CLI `0.162.1` and Claude Code `2.1.296`.
-Claude Code manifest/skill validation is checked locally. Plugin installation,
-interactive discovery and end-to-end client execution remain manual acceptance
-checks; the installation commands are documentation examples, not executed here.
+Local installation is verified with Codex CLI `0.162.1` and Claude Code `2.1.296`:
+both list `axefx@axefx-local` as installed and enabled. Codex's cached files match
+the source; Claude's component inventory lists the `axefx-preset` skill. The
+repository's direct Python interpreter and CLI are available. Interactive agent
+execution and live USB behavior are separate acceptance checks; installation
+does not perform device operations.
 
