@@ -174,15 +174,19 @@ def execute(a,backend,store):
             return {'block':b['ref'],'channel':ch,'parameter':p['name'],'definition':p,'current':current,'simulated':True}
         require(getattr(a,'channel',None) is None,'PROTOCOL_UNRESOLVED','Use the current channel for USB reads')
         return {'block':a.block,'parameter':a.parameter,'current':backend.parameter_value(a.block,a.parameter)}
-    state=backend.read_state();p=state['current']
+    if backend.name!='mock' and a.group in ('preset','block') and 'geometry' in backend.capabilities()['read']:
+        state=backend.read_state(include_geometry=True)
+    else:state=backend.read_state()
+    p=state['current']
     if a.group=='device':return {'device':state['device'],'capabilities':backend.capabilities()}
     if a.group=='preset':
         result=inspect(p)
-        if a.action=='geometry':return {k:result[k] for k in ('geometry','cells','blocks','connections')}
+        if a.action=='geometry':return {k:result[k] for k in ('slot','name','active_scene','geometry','cells','blocks','connections')} | {
+            'complete_geometry':p.get('complete_geometry',p['complete'])}
         return result
     if a.group=='block':
         result=inspect(p)
-        if a.action=='list':return {'blocks':result['blocks'],'complete_geometry':p['complete']}
+        if a.action=='list':return {'blocks':result['blocks'],'complete_geometry':p.get('complete_geometry',p['complete'])}
         b=block(result,a.block)
         definitions=summary(effect_type(b['type_id'])) if b['type_id'] is not None else None
         if definitions:
@@ -219,9 +223,16 @@ def text_output(result):
     data=result['data']
     lines=[f"backend={result['backend']} schema={SCHEMA_VERSION}"]
     if isinstance(data,dict) and 'cells' in data:
-        rows=data['cells'];width=max(8,max((len(cell or '.') for row in rows for cell in row),default=0))
+        if 'name' in data:lines.append(f"Preset {data['slot']}: {data['name']} | Scene {data['active_scene']}")
+        effects={b['ref']:b for b in data['blocks']}
+        rows=[[('===' if effects.get(cell,{}).get('type')=='shunt' else
+                '+' if effects.get(cell,{}).get('type')=='wire' else
+                cell+'*' if effects.get(cell,{}).get('bypass') else cell)
+               for cell in row] for row in data['cells']]
+        width=max(8,max((len(cell or '.') for row in rows for cell in row),default=0))
         lines.append('     '+' '.join(str(i).center(width) for i in range(1,len(rows[0])+1)))
         for i,row in enumerate(rows,1):lines.append(f'{i:>3} |'+'|'.join((cell or '.').center(width) for cell in row)+'|')
+        lines.append('=== shunt; + empty-cell cable endpoint; * bypassed; arrows below are physical cables')
         lines.extend(f"{e['from']} -> {e['to']}" for e in data['connections'])
     else:lines.append(json.dumps(data,indent=2,allow_nan=False))
     lines.extend('Warning: '+w for w in result['warnings'])
@@ -249,7 +260,7 @@ def main(argv=None):
             warnings=[]
             if args.backend=='mock':warnings=['Simulated device. No USB traffic was sent; mock behavior is not hardware verification.']
             elif args.backend=='replay':warnings=['File replay only. No USB traffic was sent; file contents do not establish hardware verification.']
-            else:warnings=['New setters are hardware-unverified. Geometry, full snapshots and structural wire operations remain unresolved.']
+            else:warnings=['New setters are hardware-unverified. Full snapshots and structural wire edits remain unresolved.']
         result={'schema_version':SCHEMA_VERSION,'ok':True,'backend':args.backend,'data':data,'warnings':warnings}
         code=0
     except AxeError as exc:

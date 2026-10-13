@@ -49,6 +49,18 @@ text exceptions. Mock/replay results always identify that no USB was contacted.
 Incomplete real/captured observations use null unavailable fields and
 `complete: false`; empty lists must not be inferred from these nulls.
 
+USB `preset inspect`, `preset geometry` and block inspection retrieve the
+physical grid and cables. Use `--format text preset geometry`, with global
+options before the command. Results use
+`complete_geometry: true` independently of full-preset `complete`. Shunts have
+position-based refs such as `shunt-r3c9`; `wire-rNcM` identifies a cable endpoint
+in an empty cell, not an inserted block. Status-only system entries retain
+`position: null`. Unknown effect IDs retain `block-N` refs. Two matching grid
+reads and unchanged preset/scene/block status guard each topology inspection.
+Replay advertises this capability only if the file contains a grid query/reply;
+the original bundled fixture has none. Unsupported reply layouts fail explicitly.
+See [routing guidance](routing.md) for faithful diagrams and tone placement.
+
 Run CLI commands sequentially for a single device/state directory. Concurrent
 commands return `DEVICE_BUSY`; retry inspection after the other command ends.
 USB uses a conservative shared lock even if different artifact directories are

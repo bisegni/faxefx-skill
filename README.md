@@ -42,9 +42,18 @@ explicit mock request: “Inspect my preset and preview a warmer clean tone.”
 Mock supports preset geometry, routing, named parameters, scenes, channels,
 modifiers, controllers and save/restore using the small authored catalog. Replay
 reads replies from a selected file; the bundled example is synthetic test data.
-USB supports recovered reads and six statically recovered
+USB retrieves grid positions, shunts and physical cable branches/merges, alongside
+the recovered public/active-amp reads and six statically recovered
 amp setters; these setters remain hardware-unverified. Real grid editing,
 full-preset snapshots and saving are unresolved.
+
+Draw the connected device's current grid without changing the preset:
+
+```sh
+.venv-cli/bin/python tools/axefx.py --format text preset geometry
+```
+
+The skill includes [diagram and tone-placement guidance](plugins/axefx/skills/axefx-preset/references/routing.md).
 
 The bundled catalog recognizes 18 types with authored simulation choices, not
 complete vendor model/parameter lists. See [the CLI guide](docs/CLI.md)

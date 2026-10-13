@@ -11,8 +11,9 @@ import uuid
 from pathlib import Path
 
 from .catalog import READ_AMP, SCALED_AMP, effect_type, finite, instance_ref, parameter, type_for_instance
-from .codec import decode_editor, editor_frame, integer, public_queries, unframe
+from .codec import decode_editor, editor_frame, grid_query, integer, public_queries, unframe
 from .errors import AxeError, require
+from .grid import attach_grid, decode_grid
 from .model import block, fixture_state
 from .operations import FIELDS, apply_operation, validate_operation, validate_preset
 from .storage import atomic_write, digest, load
@@ -21,11 +22,12 @@ ALL_OPS = list(FIELDS)
 
 
 def validate_usb_packet(packet):
-    """Last-boundary guard for implemented queries/numeric amp writes only."""
+    """Last-boundary guard for fixed read queries and numeric amp writes only."""
     try:
         command,_=unframe(packet)
         if packet in public_queries().values():return
-        require(command==1,'UNSUPPORTED_PACKET','Only compiled public queries and amp parameter operations are implemented')
+        if packet==grid_query():return
+        require(command==1,'UNSUPPORTED_PACKET','Only fixed public/grid reads and amp parameter operations are implemented')
         d=decode_editor(packet)
         require(d['effect'] in (58,59,60,61) and d['index']==0 and not d['data_hex'],
                 'UNSUPPORTED_PACKET','Invalid numeric amp operation fields')
@@ -249,10 +251,10 @@ class USBBackend:
         return USBTransport.enumerate_ports()
 
     def capabilities(self):
-        return {'read':['preset_identity','active_scene','scene_name','tempo','block_status','active_amp_parameters'],
+        return {'read':['preset_identity','active_scene','scene_name','tempo','block_status','active_amp_parameters','geometry','connections'],
                 'edit':['parameter.set'], 'writes_enabled':True, 'verification':'reads_hardware_verified; setter_static_only',
                 'hardware_verified':False, 'complete_snapshot':False,
-                'parameter_set_names':sorted(SCALED_AMP),'unresolved':['firmware_identification','geometry','connections','full_snapshot','block_edits','scenes','channels','modifiers','controllers','copy','save'],
+                'parameter_set_names':sorted(SCALED_AMP),'unresolved':['firmware_identification','full_snapshot','block_edits','scenes','channels','modifiers','controllers','copy','save'],
                 'warning':'No experimental switch. Approved numeric amp writes are implemented but hardware-unverified. Other wire formats are unresolved.'}
 
     def check_operations(self,operations):
@@ -267,6 +269,9 @@ class USBBackend:
         expected=unframe(public_queries()[name])[0]
         require(command==expected,'INVALID_REPLY','Wrong public reply command')
         return reply,payload
+
+    def read_geometry(self):
+        return decode_grid(self.connection().query(grid_query()))
 
     def parameter_value(self,ref,name):
         # Confirm existence/current channel through status; never assume an amp is present.
@@ -293,7 +298,7 @@ class USBBackend:
         return {'value':value,'raw_value':raw,'raw_bits':d['value_bits'],'display':text,
                 'unit':'knob' if name in SCALED_AMP else 'device-text','semantics':'captured' if self.name=='replay' else 'device_read'}
 
-    def read_state(self,operations=(),validate=True):
+    def read_state(self,operations=(),validate=True,include_geometry=False):
         if validate:self.check_operations(operations)
         messages={};values={}
         for name in ('preset_name','scene','scene_name','tempo','status'):
@@ -306,7 +311,7 @@ class USBBackend:
         p={'slot':integer(values['preset_name'][:2]),'name':values['preset_name'][2:].split(b'\0',1)[0].decode('ascii','replace').rstrip(),
            'geometry':None,'blocks':[],'connections':None,'scenes':None,'active_scene':active,
            'active_scene_name':values['scene_name'][1:].split(b'\0',1)[0].decode('ascii','replace').rstrip(),
-           'modifiers':None,'controllers':None,'unsaved':None,'complete':False,'tempo':integer(values['tempo'])}
+           'modifiers':None,'controllers':None,'unsaved':None,'complete':False,'complete_geometry':False,'tempo':integer(values['tempo'])}
         data=values['status']
         for i in range(0,len(data),3):
             ident=integer(data[i:i+2]);bits=data[i+2];ch=(bits>>1)&7;count=(bits>>4)&7
@@ -316,10 +321,15 @@ class USBBackend:
             p['blocks'].append({'ref':ref,'instance_id':ident,'type_id':tid,'type':alias,'position':None,
                                 'active_channel':'ABCD'[ch],'bypass':bool(bits&1),
                                 'channels':{c:{'parameters':{}} for c in 'ABCD'[:max(count,1)]}})
+        grid=self.read_geometry() if include_geometry else None
+        if grid is not None:attach_grid(p,grid)
         for op in operations:
             b=block(p,op['block']);channel=op.get('channel') or b['active_channel']
             require(channel==b['active_channel'],'PROTOCOL_UNRESOLVED','Inactive-channel getters/setters are unresolved over USB')
             b['channels'][channel]['parameters'][op['parameter']]=self.read_parameter(b,op['parameter'])
+        # Compare decoded geometry, ignoring the editor's changing UI cursor.
+        if grid is not None:
+            require(self.read_geometry()==grid,'CONTEXT_CHANGED','Grid changed while capturing; retry inspection')
         # Guard against selection/channel changes while sampling the snapshot.
         for name in ('preset_name','scene','status'):
             again,_=self.query_public(name)
@@ -383,6 +393,9 @@ class ReplayBackend(USBBackend):
 
     def capabilities(self):
         result=super().capabilities();result.update(writes_enabled=False,edit=[],verification='file_replay',hardware_verified=False)
+        if grid_query() not in self.transport.replies:
+            result['read']=[r for r in result['read'] if r not in ('geometry','connections')]
+            result['unresolved']+=['geometry','connections']
         return result
 
     def apply(self,operation,snapshots):

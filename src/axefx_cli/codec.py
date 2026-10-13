@@ -82,6 +82,10 @@ def decode_editor(message):
                 value_float=struct.unpack('<f', struct.pack('<I', value_bits))[0],
                 index=integer(p[11:13]), data_hex=unpack_bytes(p[15:], length).hex())
 
+def grid_query():
+    """Read the edit-buffer grid (Axe-Edit III's operation 0x2e)."""
+    return editor_frame(0x2e)
+
 def public_queries():
     return {
         'status': frame(0x13), 'scene': frame(0x0c, b'\x7f'),

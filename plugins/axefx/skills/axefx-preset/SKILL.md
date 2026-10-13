@@ -21,6 +21,9 @@ and recovery. Discover the contract with `python tools/axefx.py schema` and insp
    Use `--backend mock` for simulation or `--backend replay --replay-file PATH`
    for recorded reads. Never silently substitute either for a requested device.
 2. Inspect the current preset, geometry, blocks and relevant catalog/parameters.
+   For diagrams or tone construction, read
+   [drawing and effect placement](references/routing.md). Lead with a short
+   ASCII overview; draw the verified physical grid when showing a current preset.
    The bundled catalog uses authored mock definitions, not a firmware schema.
    Mock model names are placeholders, never real-device model selections.
    Missing geometry or wire
@@ -55,13 +58,20 @@ changes, and obtain approval before applying it. Artifacts survive disconnects.
 - Mock supports full domain authoring and is clearly labeled simulated. Its
   parameter/controller behavior is not hardware evidence or audio simulation.
 - Replay reads replies from the selected file and never writes. The bundled
-  fixture is synthetic test data, not a hardware capture. It has no grid
-  capture and cannot describe topology from block-status data alone.
-- USB supports the recovered public reads and active amp getters. Approved
+  fixture is synthetic test data, not a hardware capture. Grid inspection is
+  available only when the selected file includes a grid request/reply; never
+  infer topology from block-status data alone.
+- USB supports the recovered public reads, active amp getters, and read-only
+  grid positions/cables through operation `002E`. `preset inspect`,
+  `preset geometry`, and block inspection include verified topology, shunts,
+  cable branches and merges. Check `complete_geometry` separately from
+  `complete`: full parameter/scene coverage remains incomplete. Unsupported
+  payload layouts and changing state return errors instead of guessed routing.
+  Approved
   numeric writes for Gain/Bass/Mid/Treble/Master/Presence use statically recovered
   operation `0009`, read back results, and restore captured parameter values on
   failures where possible. These setters remain hardware-unverified.
-- USB geometry, full-preset snapshots, structural editing, saving, scenes,
+- USB full-preset snapshots, structural editing, saving, scene edits,
   inactive-channel contents, modifiers and controllers are unresolved and return
   explicit errors. Do not claim these are available because they work in mock.
 

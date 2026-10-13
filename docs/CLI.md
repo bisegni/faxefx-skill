@@ -42,15 +42,48 @@ and script paths. Only third-party dependencies are installed, not this project.
 |---|---|
 | `--backend mock` | Stateful simulation with geometry, routing, blocks, parameters, scenes, channels, modifiers, controllers, new/copy/save and restore. Sends no USB traffic. |
 | `--backend replay --replay-file PATH` | Replies from the selected file. Read-only; cannot invent geometry or new operations. The bundled fixture is synthetic. |
-| `--backend usb` (default) | Recovered public reads and active amp getters; approved numeric amp setters are implemented from static evidence but hardware-unverified. |
+| `--backend usb` (default) | Public reads, active amp getters, and grid/cable retrieval; approved numeric amp setters are implemented from static evidence but hardware-unverified. |
 
-USB geometry, complete preset snapshots, structural edits, preset saving,
+USB complete preset snapshots, structural edits, preset saving,
 scene/channel edits, modifiers and controllers remain **protocol-unresolved**.
 They return explicit errors. A working mock is not proof of those USB operations.
-No live-device test is part of this implementation phase.
+Grid retrieval has been checked on a connected Axe-Fx III on macOS. This does
+not establish hardware editing support or Windows/Linux USB verification.
 
 Global options go **before** the command. Run commands sequentially for one device.
 JSON is the default output; `--format text` is easier to read by hand.
+
+## Inspect the USB grid
+
+```sh
+python tools/axefx.py preset inspect
+python tools/axefx.py --format text preset geometry
+python tools/axefx.py block list
+```
+
+These commands retrieve positions, shunts, and physical cables from the edit
+buffer without editing it. JSON includes `complete_geometry: true`; full preset
+`complete` remains false because inactive parameters and other contents are
+unavailable. Status-only system blocks have `position: null`. Unknown IDs keep
+their `block-N` labels. Shunts use position-based refs; empty-cell cable endpoints
+use `wire-rNcM`, not guessed effect identities. ASCII uses `===` for shunts and
+`+` for empty-cell endpoints, followed by explicit physical cable pairs.
+
+Each inspection compares two decoded grids and checks preset/scene/block status
+for changes. The UI cursor is ignored. Unknown reply layouts or changes fail
+explicitly; retry after the device is stable. Replay supplies this data only when
+the selected file contains a grid request/reply. The bundled synthetic fixture
+does not contain one.
+
+The fixed editor getter is operation `0x2e` with all request fields zero. The
+640-byte unpacked reply has 84 column-major cells beginning at byte 304; each is
+a little-endian uint16 block ID followed by a uint16 mask of input rows from the
+previous column. Only six mask bits are accepted. Full shunt IDs `1024–1087`
+are preserved. The getter was traced in local Axe-Edit III 1.15.00 and validated
+by read-only device replies. An independent
+[hardware protocol report](https://github.com/BigSaurus/axefx-sysex-maps/blob/main/ADVANCED_COMMANDS.md#4-grid-read--01-2e)
+also identifies the getter; this decoder unpacks full cell words instead of
+using that report's truncated packed-byte marker extraction.
 
 ## Inspect a simulated preset by hand
 
