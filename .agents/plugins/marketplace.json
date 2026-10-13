@@ -1,0 +1,12 @@
+{
+  "name": "axefx-local",
+  "interface": {"displayName": "Axe-Fx III Local"},
+  "plugins": [
+    {
+      "name": "axefx",
+      "source": {"source": "local", "path": "./plugins/axefx"},
+      "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+      "category": "Productivity"
+    }
+  ]
+}

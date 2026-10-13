@@ -1,0 +1,10 @@
+{
+  "name": "axefx",
+  "version": "0.1.0",
+  "description": "Design Axe-Fx III presets through a Python CLI with named operations, previews, user approval, and recovery artifacts.",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Axe-Fx III Preset Assistant",
+    "shortDescription": "Design and edit presets through the axefx Python CLI"
+  }
+}
