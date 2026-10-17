@@ -1,3 +1,5 @@
+> Native replacement development is on `feat/axe-studio-native`. See [native status](native/README.md) and the [approved contract](todo/NATIVE_APP_PLAN.md). The native app is not yet an acceptance candidate. The legacy instructions below remain available during development.
+
 # Axe-Fx III Python CLI and AI skill
 
 Design, visualize, and inspect Axe-Fx III presets with an AI skill, a Python

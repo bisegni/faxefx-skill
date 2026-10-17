@@ -1,0 +1,13 @@
+[package]
+name = "axe-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axe-domain.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
+midir = "0.10"

@@ -70,3 +70,6 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# Native workspace build artifacts
+/target/
