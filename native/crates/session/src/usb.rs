@@ -73,7 +73,8 @@ pub fn capture(input_name: &str, output_name: &str) -> Result<Snapshot, String> 
                 .map_err(|_| "Read timed out; no write was sent".to_string())?;
             if let Ok((op, p)) = unframe(&bytes)
                 && op == opcode
-                && (op != 1 || (p.len() > 15 && p.starts_with(&[0x2e, 0])))
+                && (op != 1 || (p.len() >= 15 && p[..6] == unframe(&packet)?.1[..6]))
+                && bytes != packet
                 && (op != 0x0c || p != [127])
             {
                 return Ok(bytes);
@@ -83,6 +84,50 @@ pub fn capture(input_name: &str, output_name: &str) -> Result<Snapshot, String> 
     };
     let first = decode_grid(&query(grid_query(), 1)?)?;
     let scene = read_scene(&query(frame(0x0c, &[127])?, 0x0c)?)?;
+    let status_before = query(frame(0x13, &[])?, 0x13)?;
+    let (_, status) = unframe(&status_before)?;
+    if !status.len().is_multiple_of(3) {
+        return Err("Invalid block status records".into());
+    }
+    let mut amps = BTreeMap::new();
+    for record in status.as_chunks::<3>().0 {
+        let effect = record[0] as u16 + ((record[1] as u16) << 7);
+        if (58..=61).contains(&effect) {
+            let channel = (record[2] >> 1) & 7;
+            let count = (record[2] >> 4) & 7;
+            if channel >= count.max(1) || count > 4 {
+                return Err("Invalid amp channel status".into());
+            }
+            let mut parameters = vec![];
+            for (id, name) in [
+                (1, "gain"),
+                (2, "bass"),
+                (3, "mid"),
+                (4, "treble"),
+                (5, "master"),
+                (20, "presence"),
+            ] {
+                let value = query(crate::protocol::amp_getter(effect, id)?, 1)
+                    .and_then(|reply| crate::protocol::amp_value(&reply, effect, id))
+                    .ok();
+                parameters.push(Parameter {
+                    id: name.into(),
+                    label: name.into(),
+                    unit: "knob".into(),
+                    confirmed: value.map(|(_, v)| v),
+                    range: value.map(|_| (0., 10.)),
+                    writable: false,
+                    automated: None,
+                    raw_bits: value.map(|(bits, _)| bits),
+                });
+            }
+            amps.insert(effect, (channel, parameters));
+        }
+    }
+    let status_after = query(frame(0x13, &[])?, 0x13)?;
+    if status_before != status_after {
+        return Err("Block/channel context changed during capture".into());
+    }
     let second = decode_grid(&query(grid_query(), 1)?)?;
     let scene_after = read_scene(&query(frame(0x0c, &[127])?, 0x0c)?)?;
     if first.slot != second.slot
@@ -92,7 +137,25 @@ pub fn capture(input_name: &str, output_name: &str) -> Result<Snapshot, String> 
     {
         return Err("Device context changed during capture; retry".into());
     }
-    snapshot(second, scene)
+    let placements = second
+        .cells
+        .iter()
+        .map(|c| ((c.column - 1, c.row - 1), c.instance))
+        .collect::<BTreeMap<_, _>>();
+    let mut snapshot = snapshot(second, scene)?;
+    for block in &mut snapshot.blocks {
+        if let Some(effect) = placements.get(&block.position)
+            && let Some((_, parameters)) = amps.get(effect)
+        {
+            block.family = "amp".into();
+            block.label = format!("Amplifier {}", effect - 57);
+            block.parameters = parameters.clone();
+        }
+    }
+    if amps.len() == 1 {
+        snapshot.context.channel = amps.values().next().map(|(channel, _)| *channel);
+    }
+    Ok(snapshot)
 }
 fn read_scene(bytes: &[u8]) -> Result<u8, String> {
     let (op, p) = unframe(bytes)?;

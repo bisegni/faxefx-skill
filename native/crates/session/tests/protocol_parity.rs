@@ -20,3 +20,22 @@ fn authored_legacy_codec_grid_parity() {
     corrupt[20] ^= 1;
     assert!(decode_grid(&corrupt).is_err());
 }
+
+#[test]
+fn authored_amp_reply_parity_and_conversion_guard() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/authored-amp.json")).unwrap();
+    let decode = |name: &str| {
+        let hex = fixture[name].as_str().unwrap();
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let (bits, value) = axe_session::protocol::amp_value(&decode("valid"), 58, 1).unwrap();
+    assert_eq!(bits, 0x3f000000);
+    assert_eq!(value, 5.);
+    assert!(axe_session::protocol::amp_value(&decode("mismatch"), 58, 1).is_err());
+    assert!(axe_session::protocol::amp_getter(62, 1).is_err());
+    assert!(axe_session::protocol::amp_getter(58, 999).is_err());
+}

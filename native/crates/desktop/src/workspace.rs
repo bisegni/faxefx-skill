@@ -46,7 +46,7 @@ impl Layout {
                         Pane::Inspector => (240., 220.),
                         Pane::Routing => (440., 300.),
                         Pane::Chat => (300., 400.),
-                        Pane::Audio => (400., 120.),
+                        Pane::Audio => (400., 170.),
                     };
                     ids.insert(*pane) && w >= mw && h >= mh
                 }

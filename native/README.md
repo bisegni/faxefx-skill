@@ -1,70 +1,65 @@
-# Axe Studio native development
+# Axe Studio native application
 
-This is an **incomplete development foundation**, not the Mac acceptance candidate.
-The approved delivery contract is in `todo/NATIVE_APP_PLAN.md`. Legacy source is
-preserved for reference and is not a dependency of the Cargo workspace or the
-standalone audio worker.
+Axe Studio is an Iced 0.14 desktop application. Rust owns the window, MIDI,
+transactions, provider integration, storage, audio artifacts and playback. A
+bundled standalone Python process performs local audio measurements over private
+versioned stdio JSON-RPC. End users do not install Python or start a server.
 
-From the repository root, run `cargo run -p axe-desktop`. The native window opens
-before MIDI discovery. USB discovery/capture runs on background blocking workers;
-only the fixed read-only grid and scene queries are exposed. If a unique Axe-Fx
-pair is found, capture starts; otherwise select endpoints or explicitly choose
-Test mock. A failed USB read never selects mock automatically. No hardware writes
-are enabled. Save tone and Restore original remain disabled in the window.
+This implementation follows the approved Rust architecture in the user handoff.
+Older Python-backend proposals in `todo/` are historical design material and do
+not describe this application. Legacy source remains available for reference and
+is excluded from native packages. Cleanup and main-history replacement require
+explicit acceptance.
 
-The five panes support drag/dock/resize and named layout save/load. Proposals are
-validated against pane minimums and retain the previous layout on failure.
-Current layout is persisted in app-owned SQLite. Default minimum client size is
-1280 × 850. Native manual/DPI/accessibility acceptance is still outstanding.
+Start development with `cargo run -p axe-desktop`. A device must be selected
+before choosing Codex or Claude. USB failure offers endpoint selection and retry;
+Test mock is an explicit separate target. The provider chooser is shown each
+launch. The initialization turn explicitly loads the bundled skill, exercises a
+read-only app tool and verifies its version before chat is enabled.
 
-## Implemented boundaries
+## Components
 
-- `axe-domain`: contexts, explicit unknown values, verified-range validation.
-- `axe-session`: SQLite FULL/WAL journals/originals/chat/settings; isolated mock;
-  read-only MIDI capture; framing/grid decoder; mock transactions and restoration.
-  Interrupted journals block subsequent writes and never auto-replay.
-- `axe-agents`: normalized adapter contract, tool allowlist, startup and revocable
-  turn guards, bundled `axefx-live` skill. No concrete provider runtime yet.
-- `axe-audio`: versioned bounded audio-worker request encoder.
-- `axe-desktop`: Iced 0.14 window, native routing canvas, generic effect registry,
-  pane layout persistence/validation and settled visual sag with simple mode.
-- `audio-worker`: standalone extracted local measurements over private JSON-RPC.
-  NumPy/SciPy/SoundFile are pinned; no legacy/application/device imports.
+- `axe-domain`: typed contexts, targets, parameters and unknown values.
+- `axe-session`: SQLite journals/originals, serialized guarded transactions,
+  partial failure recovery, persistent isolated mock and fixed USB read queries.
+- `axe-agents`: Codex App Server and Claude headless adapters, normalized events,
+  revocable per-turn tools, scoped authenticated loopback MCP and interruption.
+- `axe-runtime`: one in-process authority for UI and agent commands, durable chat,
+  provider sessions and explicit analysis attachments; exclusive application lock.
+- `axe-audio`: content-addressed bounded imports, decoding, waveform, excerpt
+  matching, playback and supervised frozen-worker jobs.
+- `axe-desktop`: five dockable/resizable panes, named layouts, effect registry,
+  generic unknown effects, damped cables, chat, audio and Save/Restore controls.
 
-The current cable model settles a bounded sag curve at draw time. Interactive
-Verlet motion, hit-testing and loose-end dragging are not implemented. Hardware
-capture retains unknown effect identities and parameters, rather than guessing
-profiles. Parameter transactions are currently enabled only for injected/mock
-transports. Originals are numeric mock values; bit-exact hardware originals,
-modifier detection and setter capability profiles still require implementation.
+App-owned SQLite retains visible messages and tool activity, including interrupted
+responses. Restart never replays a mutation. Mock edit buffers and originals are
+stored separately from hardware sessions. Save and Restore are user commands;
+providers cannot call them. Closing drains an active turn before reading dirty
+state and offers Save, Restore, Leave unsaved or Cancel when needed.
 
-## Outstanding delivery gates
+See [CAPABILITIES.md](CAPABILITIES.md) for enforced support boundaries and
+[MAC_HANDOFF.md](MAC_HANDOFF.md) for the manual checklist. Hardware writes,
+hardware Save/Restore and optional guitar separation are unavailable. Mock Save
+persists a simulated destination and is not proof of device saving.
 
-Concrete Codex App Server and Claude headless adapters; protocol/version and tool
-restriction compatibility; explicit runtime skill ingestion; live streaming and
-chat checkpoint/resume UI; authenticated scoped Claude MCP; audio job supervision,
-artifact import/playback/waveforms/A-B/attachments; model download management;
-complete controls and dirty-close handling; serialized cancellable runtime writer;
-physical profile validation, readback/Restore and save/reload; full layout keyboard,
-DPI/accessibility checks; installable interpreter-bundled packages; clean-machine
-checks; all OS hardware gates; signing when credentials exist. Optional separation
-is currently reported unavailable by the standalone worker.
-
-Physical setter experiments require a designated test preset and verified backup.
-This development run performs no physical writes. No release or acceptance claim
-follows from injected transport tests. CI defines the three-OS build/test matrix;
-a local Mac pass is not evidence that remote Windows/Linux jobs have passed.
-
-## Verification
+## Build and verification
 
 ```sh
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo fmt --all --check
 python -m pytest -q native/audio-worker
+python native/tools/ci_package.py
 ```
 
-Use an environment containing `native/audio-worker/requirements.txt` plus pytest
-for the last command. These are developer commands, not end-user installation
-instructions. Packaged distribution must include an interpreter; packaging remains
-unfinished. Do not remove legacy code or rewrite main before explicit acceptance.
+The last commands are developer commands in an isolated environment. The package
+script freezes the pinned audio dependencies/interpreter, builds Rust, copies
+only app resources, generates a hash manifest and archives the candidate. Mac
+packages receive an ad-hoc signature; Developer ID/notarization needs release
+credentials. CI defines macOS, Windows and Linux build/test/package jobs.
+
+Supported provider prerequisites are Codex 0.163.x with its authenticated runtime,
+or Claude Code 2.1.x >=2.1.286 and an Anthropic API key. Claude credentials can be
+entered for the current application session; they are not saved. Consumer
+subscription access is not assumed. Additional protocol versions need compatibility
+tests. Claude's real authenticated gate remains pending a user credential.

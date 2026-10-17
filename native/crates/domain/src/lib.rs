@@ -33,6 +33,8 @@ pub struct Parameter {
     pub range: Option<(f64, f64)>,
     pub writable: bool,
     pub automated: Option<bool>,
+    #[serde(default)]
+    pub raw_bits: Option<u32>,
 }
 impl Parameter {
     pub fn validate(&self, value: f64) -> Result<(), Error> {
@@ -78,6 +80,8 @@ pub struct Change {
 }
 #[derive(Debug, Error, PartialEq)]
 pub enum Error {
+    #[error("Operation cancelled; completed writes were checked for rollback")]
+    Cancelled,
     #[error("Operation is not verified for this target")]
     Unsupported,
     #[error("Device context changed")]
@@ -110,6 +114,7 @@ mod tests {
             range: Some((0., 10.)),
             writable: true,
             automated: Some(false),
+            raw_bits: None,
         };
         assert_eq!(p.validate(2.), Err(Error::UnknownOriginal));
         p.confirmed = Some(1.);

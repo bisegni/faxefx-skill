@@ -3,9 +3,77 @@ use crate::{Message, cables, effects::EffectWidgetRegistry, style};
 use axe_domain::{Block, Snapshot};
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+};
 pub struct RoutingCanvas<'a> {
     pub snapshot: &'a Snapshot,
     pub simple: bool,
+    pub selected: Option<&'a str>,
+    pub positions: &'a BTreeMap<String, (f32, f32)>,
+}
+pub struct RoutingState {
+    drag: Option<(String, Point, Point)>,
+    loose: Option<Point>,
+    pointer: Point,
+    awake: Cell<bool>,
+    chains: RefCell<BTreeMap<(String, String), cables::CableSimulation>>,
+    last: Cell<Option<std::time::Instant>>,
+}
+impl Default for RoutingState {
+    fn default() -> Self {
+        Self {
+            drag: None,
+            loose: None,
+            pointer: Point::ORIGIN,
+            awake: Cell::new(true),
+            chains: Default::default(),
+            last: Cell::new(None),
+        }
+    }
+}
+impl RoutingCanvas<'_> {
+    fn geometry(&self, bounds: Rectangle) -> (f32, f32, impl Fn(&Block) -> Point + use<'_>) {
+        let max_col = self
+            .snapshot
+            .blocks
+            .iter()
+            .map(|b| b.position.0)
+            .max()
+            .unwrap_or(4)
+            .max(4) as f32;
+        let max_row = self
+            .snapshot
+            .blocks
+            .iter()
+            .map(|b| b.position.1)
+            .max()
+            .unwrap_or(0) as f32;
+        let width = 90_f32.min((bounds.width - 40.).max(90.) / 3.);
+        let height = 96.;
+        (width, height, move |b: &Block| {
+            let p = self
+                .positions
+                .get(&b.id)
+                .map(|(x, y)| Point::new(*x, *y))
+                .unwrap_or_else(|| {
+                    Point::new(
+                        18. + b.position.0 as f32 / max_col * (bounds.width - width - 36.).max(0.),
+                        if max_row == 0. {
+                            (bounds.height * 0.46 - height / 2.).max(18.)
+                        } else {
+                            40. + b.position.1 as f32 / max_row
+                                * (bounds.height - height - 100.).max(0.)
+                        },
+                    )
+                });
+            Point::new(
+                p.x.clamp(8., (bounds.width - width - 8.).max(8.)),
+                p.y.clamp(8., (bounds.height - height - 8.).max(8.)),
+            )
+        })
+    }
 }
 fn line(f: &mut Frame, a: Point, b: Point, color: Color, width: f32) {
     f.stroke(
@@ -89,10 +157,80 @@ fn icon(f: &mut Frame, family: &str, p: Point, color: Color) {
     }
 }
 impl canvas::Program<Message> for RoutingCanvas<'_> {
-    type State = ();
+    type State = RoutingState;
+    fn update(
+        &self,
+        state: &mut RoutingState,
+        event: &canvas::Event,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        let (width, height, position) = self.geometry(bounds);
+        match event {
+            canvas::Event::Window(iced::window::Event::RedrawRequested(_)) if state.awake.get() => {
+                Some(canvas::Action::request_redraw())
+            }
+            canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+                let p = cursor.position_in(bounds)?;
+                state.pointer = p;
+                state.awake.set(true);
+                for block in self.snapshot.blocks.iter().rev() {
+                    let a = position(block);
+                    if ((p.x - a.x).abs() < 7. || (p.x - a.x - width).abs() < 7.)
+                        && (p.y - a.y - height / 2.).abs() < 7.
+                    {
+                        state.loose = Some(Point::new(
+                            if (p.x - a.x).abs() < 7. {
+                                a.x
+                            } else {
+                                a.x + width
+                            },
+                            a.y + height / 2.,
+                        ));
+                        return Some(canvas::Action::request_redraw().and_capture());
+                    }
+                    if Rectangle::new(a, Size::new(width, height)).contains(p) {
+                        state.drag = Some((block.id.clone(), p, a));
+                        return Some(
+                            canvas::Action::publish(Message::SelectBlock(block.id.clone()))
+                                .and_capture(),
+                        );
+                    }
+                }
+                None
+            }
+            canvas::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
+                let p = cursor.position_in(bounds)?;
+                state.pointer = p;
+                if let Some((id, start, origin)) = &state.drag {
+                    return Some(
+                        canvas::Action::publish(Message::MoveBlock(
+                            id.clone(),
+                            (origin.x + p.x - start.x, origin.y + p.y - start.y),
+                        ))
+                        .and_capture(),
+                    );
+                }
+                if state.loose.is_some() {
+                    return Some(canvas::Action::request_redraw().and_capture());
+                }
+                None
+            }
+            canvas::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                state.drag = None;
+                if state.loose.take().is_some() {
+                    return Some(
+                        canvas::Action::publish(Message::UnsupportedRouting).and_capture(),
+                    );
+                }
+                None
+            }
+            _ => None,
+        }
+    }
     fn draw(
         &self,
-        _: &(),
+        state: &RoutingState,
         renderer: &Renderer,
         _: &Theme,
         bounds: Rectangle,
@@ -109,33 +247,15 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
                 );
             }
         }
-        let max_col = self
-            .snapshot
-            .blocks
-            .iter()
-            .map(|b| b.position.0)
-            .max()
-            .unwrap_or(4)
-            .max(4) as f32;
-        let max_row = self
-            .snapshot
-            .blocks
-            .iter()
-            .map(|b| b.position.1)
-            .max()
-            .unwrap_or(0) as f32;
-        let width = 90_f32.min((bounds.width - 40.).max(90.) / 3.);
-        let height = 96.;
-        let position = |b: &Block| {
-            Point::new(
-                18. + b.position.0 as f32 / max_col * (bounds.width - width - 36.).max(0.),
-                if max_row == 0. {
-                    (bounds.height * 0.46 - height / 2.).max(18.)
-                } else {
-                    40. + b.position.1 as f32 / max_row * (bounds.height - height - 100.).max(0.)
-                },
-            )
-        };
+        let (width, height, position) = self.geometry(bounds);
+        let now = std::time::Instant::now();
+        let elapsed = state
+            .last
+            .replace(Some(now))
+            .map(|last| now.duration_since(last).as_secs_f32())
+            .unwrap_or(1. / 60.);
+        let mut awake = false;
+        let mut chains = state.chains.borrow_mut();
         for (a, b) in &self.snapshot.edges {
             let (Some(source), Some(target)) = (
                 self.snapshot.blocks.iter().find(|x| &x.id == a),
@@ -147,18 +267,24 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
             let b = position(target);
             let start = Point::new(a.x + width, a.y + height / 2.);
             let end = Point::new(b.x, b.y + height / 2.);
-            let mut cable = cables::CableSimulation::new(
+            let key = (source.id.clone(), target.id.clone());
+            let cable = chains.entry(key).or_insert_with(|| {
+                cables::CableSimulation::new(
+                    cables::Point {
+                        x: start.x,
+                        y: start.y,
+                    },
+                    cables::Point { x: end.x, y: end.y },
+                )
+            });
+            cable.endpoints(
                 cables::Point {
                     x: start.x,
                     y: start.y,
                 },
                 cables::Point { x: end.x, y: end.y },
             );
-            for _ in 0..64 {
-                if !cable.step(self.simple) {
-                    break;
-                }
-            }
+            awake |= cable.advance(elapsed, self.simple);
             let path = Path::new(|p| {
                 p.move_to(start);
                 for pt in &cable.points[1..] {
@@ -185,12 +311,13 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
             );
         }
         let registry = EffectWidgetRegistry::default();
-        let selected = self
-            .snapshot
-            .blocks
-            .iter()
-            .find(|b| !b.parameters.is_empty())
-            .map(|b| b.id.as_str());
+        let selected = self.selected.or_else(|| {
+            self.snapshot
+                .blocks
+                .iter()
+                .find(|b| !b.parameters.is_empty())
+                .map(|b| b.id.as_str())
+        });
         for b in &self.snapshot.blocks {
             let p = position(b);
             let material = registry.presentation(&b.family);
@@ -273,6 +400,15 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
                 );
             }
         }
+        if let Some(start) = state.loose {
+            f.stroke(
+                &Path::line(start, state.pointer),
+                Stroke::default().with_color(style::BLUE).with_width(2.),
+            );
+        }
+        state
+            .awake
+            .set(awake || state.drag.is_some() || state.loose.is_some());
         vec![f.into_geometry()]
     }
 }

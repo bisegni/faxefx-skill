@@ -101,7 +101,8 @@ impl Studio {
                 let selected = self.snapshot.as_ref().and_then(|s| {
                     s.blocks
                         .iter()
-                        .find(|b| !b.parameters.is_empty())
+                        .find(|b| self.selected_block.as_ref() == Some(&b.id))
+                        .or_else(|| s.blocks.iter().find(|b| !b.parameters.is_empty()))
                         .or_else(|| s.blocks.first())
                 });
                 let mut body = column![].spacing(9);
@@ -172,6 +173,39 @@ impl Studio {
                             .spacing(10)
                             .align_y(iced::Center),
                         );
+                        if let (Some(value), Some((min, max))) = (p.confirmed, p.range)
+                            && self
+                                .snapshot
+                                .as_ref()
+                                .is_some_and(|s| s.context.target == axe_domain::Target::TestMock)
+                            && p.writable
+                            && !self.agent_busy
+                        {
+                            let block = b.id.clone();
+                            let parameter = p.id.clone();
+                            body = body.push(
+                                iced::widget::slider(
+                                    min..=max,
+                                    self.pending_parameters
+                                        .get(&(block.clone(), parameter.clone()))
+                                        .copied()
+                                        .unwrap_or(value),
+                                    {
+                                        let block = block.clone();
+                                        let parameter = parameter.clone();
+                                        move |v| {
+                                            Message::PreviewAdjust(
+                                                block.clone(),
+                                                parameter.clone(),
+                                                v,
+                                            )
+                                        }
+                                    },
+                                )
+                                .on_release(Message::CommitAdjust(block, parameter))
+                                .step(0.1),
+                            );
+                        }
                     }
                     if b.parameters.is_empty() {
                         body =
@@ -183,7 +217,7 @@ impl Studio {
                             .as_ref()
                             .is_some_and(|s| s.context.target == axe_domain::Target::TestMock)
                         {
-                            "●  Simulated values · read-only"
+                            "●  Simulated values · live controls"
                         } else {
                             "●  Device capture · read-only"
                         },
@@ -228,6 +262,8 @@ impl Studio {
                             iced::widget::canvas(routing::RoutingCanvas {
                                 snapshot: s,
                                 simple: self.simple_cables,
+                                selected: self.selected_block.as_deref(),
+                                positions: &self.block_positions,
                             })
                             .width(Length::Fill)
                             .height(Length::Fill),
@@ -256,110 +292,8 @@ impl Studio {
                 }
                 body.into()
             }
-            Pane::Chat => {
-                let available = self.snapshot.is_some();
-                column![
-                    row![
-                        text("✧").size(26).color(style::BLUE),
-                        column![
-                            heading("Shape your sound"),
-                            label("Choose your tone assistant")
-                        ]
-                        .spacing(4)
-                    ]
-                    .spacing(12)
-                    .align_y(iced::Center),
-                    text("Describe what you hear and where you want to take it.")
-                        .size(13)
-                        .color(style::MUTED),
-                    row![
-                        control(
-                            "Codex",
-                            available.then_some(Message::Choose(axe_agents::Provider::Codex))
-                        )
-                        .width(Length::Fill),
-                        control(
-                            "Claude",
-                            available.then_some(Message::Choose(axe_agents::Provider::Claude))
-                        )
-                        .width(Length::Fill)
-                    ]
-                    .spacing(8),
-                    container(
-                        column![
-                            heading(if available {
-                                "Provider connection unavailable"
-                            } else {
-                                "Start with your device"
-                            }),
-                            label(if available {
-                                "Provider setup is not available in this development build."
-                            } else {
-                                "Read a preset before choosing an assistant."
-                            })
-                        ]
-                        .spacing(8)
-                    )
-                    .padding(14)
-                    .style(style::inset),
-                    space::vertical(),
-                    container(
-                        column![
-                            text("Tell me what you hear…").size(13).color(style::MUTED),
-                            row![
-                                label("Conversation unavailable"),
-                                space::horizontal(),
-                                control("Send", None)
-                            ]
-                            .align_y(iced::Center)
-                        ]
-                        .spacing(14)
-                    )
-                    .padding(12)
-                    .width(Length::Fill)
-                    .style(style::inset)
-                ]
-                .spacing(16)
-                .into()
-            }
-            Pane::Audio => {
-                let lane = |title| {
-                    container(
-                        column![
-                            row![heading(title), space::horizontal(), label("No file loaded")],
-                            container(
-                                row![
-                                    text("∿").size(26).color(style::MUTED),
-                                    label("Import a reference or recording to audition")
-                                ]
-                                .spacing(12)
-                                .align_y(iced::Center)
-                            )
-                            .height(34)
-                            .center_x(Length::Fill)
-                            .center_y(34)
-                        ]
-                        .spacing(8),
-                    )
-                    .padding(8)
-                    .width(Length::Fill)
-                    .style(style::inset)
-                };
-                row![
-                    lane("Reference guitar"),
-                    control("▶", None),
-                    lane("Your recording"),
-                    column![
-                        row![control("A", None), control("B", None)].spacing(4),
-                        control("Analyze excerpt", None),
-                        label("Audio setup unavailable")
-                    ]
-                    .spacing(8)
-                ]
-                .spacing(12)
-                .align_y(iced::Center)
-                .into()
-            }
+            Pane::Chat => self.chat_view(),
+            Pane::Audio => self.audio_view(),
         }
     }
     pub(super) fn view(&self) -> Element<'_, Message> {
@@ -393,10 +327,28 @@ impl Studio {
                         style::MUTED
                     }
                 ),
-                control("Restore original", None),
+                control(
+                    "Restore original",
+                    (self
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.context.target == axe_domain::Target::TestMock)
+                        && !self.device_busy
+                        && !self.agent_busy)
+                        .then_some(Message::Restore)
+                ),
                 button(text("Save tone").size(12))
                     .padding([8, 18])
                     .style(style::primary)
+                    .on_press_maybe(
+                        (self
+                            .snapshot
+                            .as_ref()
+                            .is_some_and(|s| s.context.target == axe_domain::Target::TestMock)
+                            && !self.agent_busy
+                            && !self.recovery)
+                            .then_some(Message::SaveDialog)
+                    )
             ]
             .spacing(12)
             .align_y(iced::Center),
@@ -413,6 +365,7 @@ impl Studio {
             control("Save layout", Some(Message::SaveLayout)),
             control("Load", Some(Message::LoadLayout)),
             space::horizontal(),
+            label("Focus pane · ⌘/Ctrl + Alt + arrows to swap"),
             control("Reset layout", Some(Message::Reset))
         ]
         .spacing(8)
@@ -445,6 +398,7 @@ impl Studio {
             .style(style::panel)
         })
         .spacing(8)
+        .on_click(Message::FocusPane)
         .on_drag(Message::Drag)
         .on_resize(8, Message::Resize)
         .height(Length::Fill);
@@ -460,9 +414,11 @@ impl Studio {
         )
         .padding([7, 10])
         .style(style::inset);
-        column![toolbar, layouts, grid, status]
-            .spacing(8)
-            .padding(12)
-            .into()
+        self.modal(
+            column![toolbar, layouts, grid, status]
+                .spacing(8)
+                .padding(12)
+                .into(),
+        )
     }
 }

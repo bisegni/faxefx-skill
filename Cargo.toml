@@ -16,3 +16,4 @@ axe-domain = { path = "native/crates/domain" }
 axe-session = { path = "native/crates/session" }
 axe-agents = { path = "native/crates/agents" }
 axe-audio = { path = "native/crates/audio" }
+axe-runtime = { path = "native/crates/runtime" }

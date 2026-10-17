@@ -105,6 +105,48 @@ pub fn decode_grid(bytes: &[u8]) -> Result<Grid, String> {
         cells,
     })
 }
+
+/// Fixed active-channel getter; this API cannot construct a setter packet.
+pub fn amp_getter(effect: u16, parameter: u16) -> Result<Vec<u8>, String> {
+    if !(58..=61).contains(&effect) || ![1, 2, 3, 4, 5, 20].contains(&parameter) {
+        return Err("Unsupported amp getter".into());
+    }
+    let mut p = vec![0; 15];
+    p[0] = 0x1a;
+    p[2] = (effect & 127) as u8;
+    p[3] = (effect >> 7) as u8;
+    p[4] = (parameter & 127) as u8;
+    p[5] = (parameter >> 7) as u8;
+    frame(1, &p)
+}
+pub fn amp_value(bytes: &[u8], effect: u16, parameter: u16) -> Result<(u32, f64), String> {
+    let (op, p) = unframe(bytes)?;
+    let request = amp_getter(effect, parameter)?;
+    let (_, expected) = unframe(&request)?;
+    if op != 1 || p.len() < 15 || p[..6] != expected[..6] || p[11..13] != [0, 0] || p[10] > 15 {
+        return Err("Amp getter reply mismatch".into());
+    }
+    let bits = p[6..11]
+        .iter()
+        .enumerate()
+        .fold(0_u64, |a, (i, b)| a | ((*b as u64) << (7 * i))) as u32;
+    let raw = f32::from_bits(bits) as f64;
+    let length = p[13] as usize + ((p[14] as usize) << 7);
+    let data = unpack(&p[15..], length)?;
+    let display = String::from_utf8_lossy(data.split(|b| *b == 0).next().unwrap_or_default());
+    let value = display
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| "Amp display conversion unavailable")?;
+    if !raw.is_finite()
+        || !(0.0..=1.0).contains(&raw)
+        || !value.is_finite()
+        || (value - raw * 10.).abs() >= 0.02
+    {
+        return Err("Amp raw/display conversion does not match the verified profile".into());
+    }
+    Ok((bits, raw * 10.))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
