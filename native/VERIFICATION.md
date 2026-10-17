@@ -26,3 +26,16 @@ compilation, tests and Clippy pass. This does not establish future toolchain sup
 No legacy source has been removed and no history has been rewritten. The prior
 work/design checkpoint is `655ef6f` on main. All native implementation stays on
 `feat/axe-studio-native`. User acceptance is still required before cleanup.
+
+## Native visual refinement
+
+The approved concept image at `todo/axe-studio-live-audition.png` was opened
+successfully. Applied a shared charcoal material palette, recessed panels,
+compact headers and controls, effect accents/vector icons, dotted routing grid,
+layered cables, and read-only parameter knobs. Chat/audio empty states retain
+honest unavailable status. Scrollbars reserve content space rather than covering
+parameter values. Native mock preview was visually checked at the default window
+size; screenshot: `output/axe-studio-polished.png`. A resize attempt did not change
+the observed window size, so it supplies no minimum-window or DPI acceptance.
+Workspace minimum-space calculations now reserve the updated global chrome.
+The 25 Rust tests, formatting and strict Clippy checks pass after the refinement.

@@ -2,6 +2,7 @@
 use std::collections::BTreeMap;
 pub struct Presentation {
     pub icon: &'static str,
+    pub accent: iced::Color,
 }
 pub struct EffectWidgetRegistry {
     families: BTreeMap<&'static str, Presentation>,
@@ -11,11 +12,32 @@ impl Default for EffectWidgetRegistry {
     fn default() -> Self {
         Self {
             families: BTreeMap::from([
-                ("amp", Presentation { icon: "AMP" }),
-                ("input", Presentation { icon: "IN" }),
-                ("output", Presentation { icon: "OUT" }),
+                (
+                    "amp",
+                    Presentation {
+                        icon: "Amp",
+                        accent: iced::color!(0xe9bb41),
+                    },
+                ),
+                (
+                    "input",
+                    Presentation {
+                        icon: "Input",
+                        accent: iced::color!(0x4aaff0),
+                    },
+                ),
+                (
+                    "output",
+                    Presentation {
+                        icon: "Output",
+                        accent: iced::color!(0x4aaff0),
+                    },
+                ),
             ]),
-            unknown: Presentation { icon: "?" },
+            unknown: Presentation {
+                icon: "?",
+                accent: iced::color!(0x879aa9),
+            },
         }
     }
 }

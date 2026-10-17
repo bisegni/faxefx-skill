@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn default_fits_minimum() {
         let l = Layout::capture(&crate::layout());
-        assert!(l.valid(1248., 730.));
+        assert!(l.valid(1256., 680.));
         assert!(!l.valid(800., 600.));
     }
     #[test]
@@ -120,6 +120,6 @@ mod tests {
         let l = Layout::capture(&crate::layout());
         let json = serde_json::to_string(&l).unwrap();
         let decoded: Layout = serde_json::from_str(&json).unwrap();
-        assert!(Layout::capture(&decoded.state()).valid(1248., 730.));
+        assert!(Layout::capture(&decoded.state()).valid(1256., 680.));
     }
 }

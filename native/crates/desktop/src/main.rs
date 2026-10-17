@@ -4,8 +4,10 @@ mod routing;
 mod workspace;
 use axe_domain::Snapshot;
 use axe_session::{Mock, Store, Transport};
-use iced::widget::{button, column, container, pane_grid, row, scrollable, text};
-use iced::{Element, Length, Theme};
+use iced::widget::pane_grid;
+mod knob;
+mod style;
+mod views;
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -19,10 +21,10 @@ enum Pane {
 impl Pane {
     fn title(self) -> &'static str {
         match self {
-            Self::Presets => "Preset navigation",
+            Self::Presets => "Presets",
             Self::Inspector => "Block inspector",
-            Self::Routing => "Routing",
-            Self::Chat => "Agent chat",
+            Self::Routing => "Signal chain",
+            Self::Chat => "Tone assistant",
             Self::Audio => "Reference audio & audition",
         }
     }
@@ -101,7 +103,7 @@ impl Default for Studio {
                 .as_ref()
                 .and_then(|s| s.setting("layout.current").ok().flatten())
                 .and_then(|j| serde_json::from_str::<workspace::Layout>(&j).ok())
-                .filter(|l| l.valid(1248., 730.))
+                .filter(|l| l.valid(1256., 680.))
                 .map(|l| l.state())
                 .unwrap_or_else(layout),
             snapshot: None,
@@ -292,7 +294,7 @@ impl Studio {
         }
         if layout_change {
             let next = workspace::Layout::capture(&self.panes);
-            if !next.valid(self.size.width - 32., self.size.height - 120.) {
+            if !next.valid(self.size.width - 24., self.size.height - 170.) {
                 self.panes = before.state();
                 self.status = "Arrangement needs more space; previous layout retained.".into();
             } else if let Some(store) = &self.store
@@ -304,64 +306,12 @@ impl Studio {
         }
         iced::Task::none()
     }
-    fn content(&self, p: Pane) -> Element<'_, Message> {
-        match p{
- Pane::Presets=>{let mut c=column![text(self.snapshot.as_ref().map(|s|s.name.as_str()).unwrap_or("No verified preset")),button("Retry USB discovery").on_press_maybe((!self.busy).then_some(Message::Retry)),button("Test mock").on_press_maybe((!self.busy).then_some(Message::Mock))].spacing(10);if let Some(ports)=&self.endpoints{c=c.push(iced::widget::pick_list(ports.inputs.clone(),self.input.clone(),Message::Input).placeholder("MIDI input")).push(iced::widget::pick_list(ports.outputs.clone(),self.output.clone(),Message::Output).placeholder("MIDI output")).push(button("Read USB").on_press_maybe((!self.busy).then_some(Message::Capture)));}scrollable(c).into()},
- Pane::Inspector=>{let mut c=column![text("Confirmed parameters")].spacing(10);if let Some(s)=&self.snapshot{for b in &s.blocks{c=c.push(text(&b.label));for p in &b.parameters{c=c.push(text(format!("{}: {} {}",p.label,p.confirmed.map(|v|v.to_string()).unwrap_or("Unknown".into()),p.unit)));}}}else{c=c.push(text("Read a preset to inspect observed values."));}scrollable(c).into()},
- Pane::Routing=>{if let Some(s)=&self.snapshot{column![iced::widget::checkbox(self.simple_cables).label("Simple cables / reduced motion").on_toggle(Message::SimpleCables),iced::widget::canvas(routing::RoutingCanvas{snapshot:s,simple:self.simple_cables}).width(Length::Fill).height(Length::Fill),text(s.edges.iter().map(|(a,b)|format!("{a} → {b}")).collect::<Vec<_>>().join("   |   "))].spacing(10).into()}else{text("Routing unavailable until a device read succeeds.").into()}},
- Pane::Chat=>{let mut c=column![text("Choose an agent after reading the device."),text("Skill initialization must succeed before conversation.")].spacing(16);if self.snapshot.is_some(){c=c.push(row![button("Codex").on_press(Message::Choose(axe_agents::Provider::Codex)),button("Claude").on_press(Message::Choose(axe_agents::Provider::Claude))].spacing(10));}c.into()},
- Pane::Audio=>column![text("Local reference and recording analysis"),text("Audio worker integration pending. Only explicitly attached summaries reach agents.")].spacing(12).into()}
-    }
-    fn view(&self) -> Element<'_, Message> {
-        let toolbar = row![
-            text("AXE STUDIO").size(26),
-            text(match self.snapshot.as_ref().map(|s| s.context.target) {
-                Some(axe_domain::Target::TestMock) => "Test mock",
-                Some(axe_domain::Target::Hardware) => "USB · read-only",
-                None => "USB · disconnected",
-            }),
-            button("Restore original"),
-            button("Save tone"),
-            button("Reset layout").on_press(Message::Reset)
-        ]
-        .spacing(24)
-        .padding(14);
-        let grid = pane_grid(&self.panes, |_, pane, _| {
-            pane_grid::Content::new(
-                container(self.content(*pane))
-                    .padding(16)
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .title_bar(pane_grid::TitleBar::new(text(pane.title())).padding(10))
-        })
-        .spacing(6)
-        .on_drag(Message::Drag)
-        .on_resize(10, Message::Resize)
-        .height(Length::Fill);
-        let layouts = row![
-            iced::widget::text_input("Layout name", &self.layout_name)
-                .on_input(Message::LayoutName)
-                .width(180),
-            button("Save layout").on_press(Message::SaveLayout),
-            button("Load layout").on_press(Message::LoadLayout)
-        ]
-        .spacing(8);
-        column![
-            toolbar,
-            layouts,
-            grid,
-            container(text(&self.status)).padding(12)
-        ]
-        .spacing(6)
-        .padding(8)
-        .into()
-    }
 }
+
 fn main() -> iced::Result {
     iced::application(Studio::new, Studio::update, Studio::view)
         .title("Axe Studio · development")
-        .theme(Theme::Dark)
+        .theme(style::theme())
         .subscription(|_| iced::event::listen().map(Message::Window))
         .window(iced::window::Settings {
             size: iced::Size::new(1440., 960.),
