@@ -20,6 +20,18 @@ canvas, read [the designer workflow](references/designer.md). The AI talks to th
 Python backend through structured CLI commands; the browser uses the same backend
 and revisions. Neither interface may invent wire formats or bypass approval.
 
+## Open the UI first
+
+For the integrated app workflow, run `python tools/axefx.py --state-dir PATH ui`.
+The browser opens before the backend reads the connected USB preset. Let the UI
+show connection errors and endpoint selectors; never substitute mock data.
+Users can connect Codex and chat inside the app, review proposed differences,
+and accept draft revisions there. In that embedded context, use the host's
+`tone_*` tools only: they cannot apply/save the device or execute CLI/shell code.
+Unknown captured bypass/channel values are null, not false or channel A.
+Refresh creates a new capture/project and preserves prior drafts. Use the same
+state directory when helping through an external CLI conversation.
+
 ## Workflow
 
 1. Resolve the backend from the request. Normal hardware use defaults to USB.

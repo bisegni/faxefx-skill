@@ -20,6 +20,8 @@ from .errors import AxeError, require
 from .protocol import coverage
 from .render import svg
 from .storage import atomic_write
+from .device_session import DeviceSession
+from .chat import Chat
 
 ROOT = Path(__file__).resolve().parents[2]
 WEB = ROOT / 'web' / 'dist'
@@ -108,9 +110,14 @@ class Jobs:
 class Workbench(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, store, project, backend='usb', port=0):
-        Designs(store).get(project)
+    def __init__(self, store, project=None, backend='usb', port=0, input_name=None, output_name=None,
+                 replay_file=None, device_factory=None, chat_factory=Chat):
+        if project:
+            Designs(store).get(project)
         self.store, self.project, self.backend = store, project, backend
+        self.device = DeviceSession(store, backend, input_name, output_name, replay_file, device_factory)
+        self.chat_factory, self.chats = chat_factory, {}
+        self.session_lock = threading.RLock()
         self.token = secrets.token_urlsafe(32)
         self.jobs = Jobs(store)
         super().__init__(('127.0.0.1', port), Handler)
@@ -118,7 +125,25 @@ class Workbench(ThreadingHTTPServer):
 
     def server_close(self):
         self.jobs.close()
+        self.device.close()
+        for chat in self.chats.values():
+            chat.close()
         super().server_close()
+
+    def current(self):
+        with self.session_lock:
+            captured = self.device.snapshot()
+            if captured['project']:
+                self.project = captured['project']
+            return self.project, captured
+
+    def chat(self):
+        project, _ = self.current()
+        require(project, 'NO_CAPTURE', 'Read a device preset before starting chat')
+        with self.session_lock:
+            if project not in self.chats:
+                self.chats[project] = self.chat_factory(self.store, project, self.backend)
+            return self.chats[project]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -181,11 +206,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def api(self, method, path, query):
         store = self.server.store; designs = Designs(store)
+        project, device = self.server.current()
         if method == 'GET':
             if path == '/api/state':
-                return {**designs.get(self.server.project), 'backend': self.server.backend,
+                return {**(designs.get(project) if project else {'project': None, 'design': None, 'revision': None}),
+                        'device_session': device, 'backend': self.server.backend,
                         'catalog': {**summary(), 'types': [summary(t) for t in CATALOG['types']]},
                         'protocol': coverage(), 'hardware_apply_available': False}, 'application/json'
+            if path == '/api/chat':
+                return self.server.chat().snapshot(), 'application/json'
             if path == '/api/render':
                 design = designs.get(self.server.project)['design']
                 view = query.get('view', ['logical'])[0]
@@ -220,6 +249,24 @@ class Handler(BaseHTTPRequestHandler):
                     name.unlink(missing_ok=True)
             body = json.loads(self.body(), parse_constant=lambda v: (_ for _ in ()).throw(ValueError(v)))
             require(isinstance(body, dict), 'INVALID_REQUEST', 'Expected a JSON object')
+            if path == '/api/device/capture':
+                require(set(body) <= {'input', 'output'}, 'INVALID_REQUEST', 'Expected MIDI input/output names')
+                require(all(isinstance(v, str) and len(v) <= 1024 for v in body.values()), 'INVALID_REQUEST', 'Endpoint names must be text')
+                require(not any(c.snapshot()['status'] in ('connecting', 'running') for c in self.server.chats.values()),
+                        'CHAT_BUSY', 'Finish or stop the AI response before refreshing the device')
+                return self.server.device.start(body.get('input'), body.get('output')), 'application/json'
+            if path.startswith('/api/chat/'):
+                require(body.get('project') == project, 'REVISION_CONFLICT', 'The current preset project changed')
+                chat = self.server.chat()
+                if path == '/api/chat/connect':
+                    return chat.connect(), 'application/json'
+                if path == '/api/chat/message':
+                    return chat.start(body.get('text'), body.get('base'), body.get('selected_block'), body.get('analysis_ids')), 'application/json'
+                if path == '/api/chat/interrupt':
+                    return chat.interrupt(), 'application/json'
+                if path == '/api/chat/decision':
+                    require(type(body.get('accept')) is bool, 'INVALID_REQUEST', 'Choose accept or reject')
+                    return chat.decide(body.get('id'), body['accept'], body.get('base')), 'application/json'
             if path == '/api/revision':
                 require(set(body) == {'base', 'design'}, 'INVALID_REQUEST', 'Expected base and design')
                 return designs.revise(self.server.project, body['base'], body['design']), 'application/json'
@@ -241,16 +288,18 @@ class Handler(BaseHTTPRequestHandler):
         raise AxeError('NOT_FOUND', 'Unknown route; this API cannot apply MIDI edits')
 
 
-def serve(store, project, backend, port=0, open_browser=True):
+def serve(store, project, backend, port=0, open_browser=True, **options):
     require((WEB / 'index.html').is_file(), 'FRONTEND_NOT_BUILT', 'Run npm ci and npm run build in web/ before design open')
     require(0 <= port <= 65535, 'INVALID_PORT', 'Choose port 0–65535')
-    server = Workbench(store, project, backend, port)
+    server = Workbench(store, project, backend, port, **options)
     url = server.origin + '/#' + server.token
-    session = store.root / 'workbench' / (project + '.json')
+    session = store.root / 'workbench' / ((project or 'device-' + str(server.server_port)) + '.json')
     atomic_write(session, {'url': url, 'pid': os.getpid(), 'project': project, 'backend': backend})
     print(json.dumps({'event': 'workbench_ready', 'url': url, 'project': project, 'backend': backend}), flush=True)
     if open_browser:
         webbrowser.open(url)
+    if project is None:
+        server.device.start()
     try:
         server.serve_forever(poll_interval=.25)
     except KeyboardInterrupt:

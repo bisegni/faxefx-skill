@@ -36,6 +36,22 @@ You can instead use `.venv-cli/bin/python tools/axefx.py` on macOS/Linux or the
 Windows interpreter path above. From another directory, use absolute interpreter
 and script paths. Only third-party dependencies are installed, not this project.
 
+## Launch the app for the connected Axe-Fx
+
+After building `web/` with `npm ci` and `npm run build`, run:
+
+```sh
+python tools/axefx.py --state-dir .local/studio ui
+```
+
+The browser opens first; the backend then reads the current USB preset. Choose
+endpoints and retry in the UI if needed. Captured settings can be unknown (`null`)
+and are displayed without defaults. Refresh reads a new snapshot and preserves
+previous projects. Connect Codex inside the app for draft-only chat and reviewed
+proposals; see [the designer guide](DESIGNER.md#chat-inside-the-app).
+`ui --no-browser` prints a session URL; `ui --port 50100` selects a fixed port.
+These options follow `ui`; global endpoint/backend/state options precede it.
+
 ## Choose a backend
 
 | Backend | Behavior |

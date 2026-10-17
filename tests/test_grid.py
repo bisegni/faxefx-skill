@@ -214,3 +214,33 @@ def test_ascii_marks_bypass_without_removing_cables():
     output = text_output({'ok': True, 'backend': 'usb', 'warnings': [], 'data': inspect(p)})
     assert 'block-58*' in output and '* bypassed' in output and '===' in output
     assert 'block-37 -> block-58' in output and 'block-58 -> shunt-r3c3' in output
+
+
+def test_real_geometry_capture_retains_null_shunts_wires_and_unknown_ids(tmp_path):
+    from axefx_cli.design import Designs, from_capture
+    from axefx_cli.render import svg
+    from axefx_cli.storage import Store
+    p = preset(37, 42, 70)
+    attach_grid(p, decode_grid(packet([(1, 1, 37, 0), (1, 2, 1024, 1),
+                                      (1, 3, 0, 1), (1, 4, 42, 1), (6, 14, 70, 0)])))
+    state = {'current': p, 'device': {'backend': 'usb', 'simulated': False}}
+    d = from_capture(state)
+    shunt = next(n for n in d['nodes'] if n['type'] == 'shunt')
+    assert shunt['bypass'] is None and shunt['active_channel'] is None
+    assert d['edges'] == p['connections']
+    assert next(n for n in d['nodes'] if n['id'] == 'block-70')['type'] == 'unknown'
+    assert len(d['nodes']) == 5
+    store = Store(tmp_path); designs = Designs(store); artifact = designs.create(d)
+    d['intent'] = 'Retain the existing routing'
+    revised = designs.revise(artifact['project'], artifact['revision'], d)
+    assert designs.get(artifact['project'])['design']['captured'] == state
+    for source in (d, state):
+        image = svg(source)
+        assert 'bypass unknown' in image and 'Unknown channel' in image
+        assert 'wire-r1c3' in image and 'block-70' in image
+        card = svg(source, block_id=shunt['id'])
+        assert 'unknown' in card
+    assert 'Unknown channel' in svg(d, scene_number=3)
+    d['captured']['current']['name'] = 'Invented'
+    with pytest.raises(AxeError, match='Captured evidence'):
+        designs.revise(artifact['project'], revised['revision'], d)

@@ -701,3 +701,167 @@ code {
   border-radius: 8px;
   margin-top: 16px;
 }
+
+.device-strip {
+  padding: 16px 30px;
+  background: #e3eef2;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.device-strip small {
+  display: block;
+  color: var(--muted);
+  margin-top: 5px;
+}
+.device-strip p {
+  margin: 8px 0 0;
+}
+.connection-actions {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+.connection-actions label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+}
+.connection-actions select {
+  max-width: 240px;
+  padding: 7px;
+}
+.refresh-choice {
+  flex-basis: 100%;
+  padding-top: 10px;
+  border-top: 1px solid #bdcdd8;
+}
+.refresh-choice button {
+  margin: 8px 8px 0 0;
+}
+.connection-page {
+  max-width: 1100px;
+  margin: 8vh auto;
+  padding: 30px;
+}
+.connection-page > p {
+  max-width: 70ch;
+  line-height: 1.6;
+}
+.connection-page .device-strip {
+  margin: 30px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.chat-panel {
+  padding: 26px 30px;
+  background: #f7fafc;
+  border-top: 1px solid var(--line);
+}
+.chat-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: baseline;
+}
+.chat-heading h2 {
+  margin: 0;
+}
+.chat-heading p {
+  margin: 8px 0;
+}
+.chat-state {
+  color: var(--muted);
+  font-size: 12px;
+}
+.chat-panel > .caption {
+  max-width: 100ch;
+}
+.chat-messages {
+  max-height: 440px;
+  overflow: auto;
+  margin: 18px 0;
+}
+.chat-message {
+  padding: 14px 18px;
+  border-left: 3px solid #86a8b6;
+  margin: 12px 0;
+  max-width: 100ch;
+  background: #edf3f6;
+}
+.chat-message.user {
+  border-color: #b8c8d4;
+  margin-left: 24px;
+  background: white;
+}
+.chat-message pre {
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  margin: 8px 0 0;
+}
+.chat-panel form {
+  max-width: 100ch;
+  display: grid;
+  gap: 10px;
+}
+.chat-panel textarea {
+  width: 100%;
+  min-height: 84px;
+  padding: 12px;
+  border: 1px solid #bdcdd8;
+  border-radius: 6px;
+}
+.chat-controls {
+  display: flex;
+  gap: 10px;
+}
+.chat-error {
+  color: #8f3535;
+}
+.proposal-review {
+  max-width: 110ch;
+  padding: 20px;
+  margin: 18px 0;
+  border: 1px solid #a7bfcb;
+  border-radius: 8px;
+  background: white;
+}
+.proposal-review h3 {
+  margin-top: 0;
+}
+.proposal-review details {
+  margin: 12px 0;
+}
+.proposal-review button {
+  margin: 10px 8px 0 0;
+}
+.proposal-diff {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.proposal-diff pre {
+  max-height: 250px;
+  overflow: auto;
+  padding: 12px;
+  background: #edf2f6;
+  font-size: 12px;
+}
+@media (max-width: 700px) {
+  .device-strip,
+  .chat-panel {
+    padding: 18px;
+  }
+  .chat-heading {
+    display: block;
+  }
+  .proposal-diff {
+    grid-template-columns: 1fr;
+  }
+}

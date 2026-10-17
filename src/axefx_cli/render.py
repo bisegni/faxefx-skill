@@ -9,6 +9,16 @@ COLORS = {'amp': '#b97435', 'cab': '#7a609e', 'drive': '#c5504c', 'compressor': 
           'delay': '#29858e', 'reverb': '#526caf', 'chorus': '#9c5d88', 'shunt': '#66788a', 'wire': '#66788a'}
 
 
+def scene_value(source, scene, node, number, field):
+    values = scene.get('bypass' if field == 'bypass' else 'channels', {})
+    if node['id'] in values:
+        return values[node['id']]
+    captured = (source.get('captured') or {}).get('current', {})
+    if captured and not captured.get('complete') and captured.get('active_scene') != number:
+        return None
+    return node.get(field)
+
+
 def graph(source, physical=False, scene_number=None):
     if source.get('kind') == 'compiled_design':
         if physical:
@@ -25,8 +35,8 @@ def graph(source, physical=False, scene_number=None):
         require(type(number) is int and 1 <= number <= 8, 'INVALID_SCENE', 'Scenes use 1–8')
         scene = next((s for s in source.get('scenes', []) if s['number'] == number), {})
         nodes = [{**n, 'position': positions[n['id']],
-                  'bypass': scene.get('bypass', {}).get(n['id'], n.get('bypass', False)),
-                  'active_channel': scene.get('channels', {}).get(n['id'], n.get('active_channel', 'A'))}
+                  'bypass': scene_value(source, scene, n, number, 'bypass'),
+                  'active_channel': scene_value(source, scene, n, number, 'active_channel')}
                  for n in source['nodes']]
         return source['name'], nodes, source['edges'], f'PROPOSED logical design · scene {number}'
     captured_label = None
@@ -42,8 +52,8 @@ def graph(source, physical=False, scene_number=None):
         require(source.get('scenes') is not None or source.get('active_scene') == scene_number,
                 'PROTOCOL_UNRESOLVED', 'This capture has no contents for the selected scene')
         scene = next((s for s in source.get('scenes') or [] if s['number'] == scene_number), {})
-        nodes = [{**n, 'bypass': scene.get('bypass', {}).get(n['id'], n.get('bypass', False)),
-                  'active_channel': scene.get('channels', {}).get(n['id'], n.get('active_channel', 'A'))} for n in nodes]
+        nodes = [{**n, 'bypass': scene.get('bypass', {}).get(n['id'], n.get('bypass')),
+                  'active_channel': scene.get('channels', {}).get(n['id'], n.get('active_channel'))} for n in nodes]
     label = captured_label or 'PROPOSED physical grid'
     if not source.get('complete'):
         label += ' · partial settings'
@@ -76,13 +86,13 @@ def svg(source, physical=False, block_id=None, scene_number=None):
         parts.append(f'<path d="M{x+140} {y+32} H{middle} V{b+32} H{a}" fill="none" stroke="#577285" stroke-width="2" marker-end="url(#arrow)"/>')
     for n in nodes:
         x, y = coords[n['id']]; color = COLORS.get(n['type'], '#4d7b6c')
-        bypass = n.get('bypass', False)
+        bypass = n.get('bypass')
         dash = ' stroke-dasharray="5 3"' if bypass else ''
         parts.extend([f'<g><title>{escape((n.get("label") or n["id"]))} · {escape(n["type"])}</title>',
                       f'<rect x="{x}" y="{y}" width="140" height="65" rx="8" fill="white" stroke="{color}" stroke-width="2"{dash}/>',
                       f'<rect x="{x}" y="{y}" width="5" height="65" rx="2" fill="{color}"/>',
                       f'<text x="{x+12}" y="{y+25}" font-family="Helvetica,Arial,sans-serif" font-size="13" fill="#20364c">{escape((n.get("label") or n["id"])[:19])}</text>',
-                      f'<text x="{x+12}" y="{y+47}" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#52687b">{escape(n["type"])} · {escape(n.get("active_channel", "A"))}{ " · bypassed" if bypass else ""}</text></g>'])
+                      f'<text x="{x+12}" y="{y+47}" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#52687b">{escape(n["type"])} · {escape(n.get("active_channel") or "Unknown channel")}{ " · bypassed" if bypass is True else " · enabled" if bypass is False else " · bypass unknown"}</text></g>'])
     parts.extend([f'<text x="32" y="{height-25}" font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#52687b">Dashed block = bypassed · cables come from graph data · positions use one-based rows/columns</text>', '</svg>'])
     return '\n'.join(parts)
 
@@ -93,7 +103,8 @@ def block_svg(name, node, status):
         values = values.get('parameters', values)
         for key, value in values.items():
             parameters[f'{ch} · {key}'] = value.get('display', value.get('value')) if isinstance(value, dict) else value
-    rows = [('Type', node['type']), ('Bypass', 'on' if node.get('bypass') else 'off'), *parameters.items()]
+    rows = [('Type', node['type']), ('Bypass', 'unknown' if node.get('bypass') is None else 'on' if node['bypass'] else 'off'),
+            ('Active channel', node.get('active_channel') or 'unknown'), *parameters.items()]
     height = 155 + 30 * len(rows)
     text = [f'<svg xmlns="http://www.w3.org/2000/svg" width="700" height="{height}" role="img">',
             f'<rect width="700" height="{height}" rx="12" fill="#edf2f6"/>',

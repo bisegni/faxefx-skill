@@ -15,10 +15,13 @@ import "@xyflow/react/dist/style.css";
 import "./style.css";
 import { Audition } from "./Audition";
 import { Performance } from "./Performance";
+import { Connection as DeviceConnection } from "./Connection";
+import { ChatPanel } from "./ChatPanel";
 import {
   canConnect,
   logicalPositions,
   removeNode,
+  sceneSetting,
   type Design,
   type DesignNode,
   type Setting,
@@ -76,7 +79,12 @@ function Block({ data, selected }: NodeProps) {
       <strong>{String(data.label)}</strong>
       <small>{String(data.detail ?? "Settings not specified")}</small>
       <span className="block-status">
-        {data.bypass ? "Bypassed" : "Enabled"} · {String(data.channel ?? "A")}
+        {data.bypass == null
+          ? "Bypass unknown"
+          : data.bypass
+            ? "Bypassed"
+            : "Enabled"}{" "}
+        · {String(data.channel ?? "Channel unknown")}
       </span>
       <Handle type="source" position={Position.Right} />
     </div>
@@ -120,6 +128,7 @@ function App() {
   const accept = useCallback((state: any) => {
     setContext(state);
     setDesign(state.design);
+    if (state.design) setScene(state.design.active_scene ?? 1);
     setRevision(state.revision);
     setDirty(false);
     setRemote(false);
@@ -139,12 +148,17 @@ function App() {
         api("state")
           .then((state) => {
             if (state.revision !== current.current.revision) {
-              if (current.current.dirty) setRemote(true);
-              else accept(state);
-            }
+              if (current.current.dirty) {
+                setRemote(true);
+                setContext((old: any) => ({
+                  ...old,
+                  device_session: state.device_session,
+                }));
+              } else accept(state);
+            } else setContext(state);
           })
           .catch(() => {}),
-      4000,
+      1000,
     );
     return () => clearInterval(interval);
   }, [accept]);
@@ -312,7 +326,10 @@ function App() {
   async function importFile(file: File) {
     const response = await fetch("/api/audio/import", {
       method: "POST",
-      headers: { Authorization: "Bearer " + sessionToken(), "X-Filename": encodeURIComponent(file.name) },
+      headers: {
+        Authorization: "Bearer " + sessionToken(),
+        "X-Filename": encodeURIComponent(file.name),
+      },
       body: file,
     });
     const data = await response.json();
@@ -328,13 +345,29 @@ function App() {
     const id = analysis?.processing?.separation?.guitar_audio_id;
     if (id) setAudioUrl(URL.createObjectURL(await blob("audio/" + id)));
   }
+  const connection = (
+    <DeviceConnection
+      device={context?.device_session}
+      dirty={dirty}
+      request={api}
+      onSave={save}
+      onDiscard={async () => accept(await api("state"))}
+    />
+  );
   if (!design || !context)
     return (
-      <main className="loading">
+      <main className="connection-page">
         <h1>Tone workbench</h1>
-        <p>{message || "Opening your local design…"}</p>
+        <p>Your current Axe-Fx preset, ready to explore.</p>
+        {connection}
+        {message && <p role="alert">{message}</p>}
         <p>
-          Use the complete session URL printed by <code>design open</code>.
+          Connect your Axe-Fx III by USB and select the preset on the device.
+          This step only reads its state.
+        </p>
+        <p>
+          Use the complete session URL printed by <code>ui</code> or{" "}
+          <code>design open</code>.
         </p>
       </main>
     );
@@ -361,8 +394,12 @@ function App() {
       label: n.label ?? n.id,
       family: n.type,
       detail: n.model ?? n.rationale ?? "",
-      channel: selectedScene?.channels?.[n.id] ?? n.active_channel ?? "A",
-      bypass: selectedScene?.bypass?.[n.id] ?? n.bypass,
+      channel:
+        tab === "logical"
+          ? sceneSetting(design, n, scene, "active_channel")
+          : n.active_channel,
+      bypass:
+        tab === "logical" ? sceneSetting(design, n, scene, "bypass") : n.bypass,
     },
     draggable: tab === "logical",
   }));
@@ -407,6 +444,7 @@ function App() {
         </div>
         <button onClick={() => setModal("protocol")}>Protocol coverage</button>
       </header>
+      {connection}
       <section className="titlebar">
         <div>
           <span className="eyeline">
@@ -753,13 +791,24 @@ function App() {
               <div className="block-id">
                 {node.id} · {node.type}
               </div>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={node.bypass ?? false}
-                  onChange={(e) => editNode({ bypass: e.target.checked })}
-                />{" "}
-                Bypass in default state
+              <label>
+                Bypass in draft default state
+                <select
+                  aria-label="Block bypass"
+                  value={node.bypass == null ? "unknown" : String(node.bypass)}
+                  onChange={(e) =>
+                    editNode({
+                      bypass:
+                        e.target.value === "unknown"
+                          ? null
+                          : e.target.value === "true",
+                    })
+                  }
+                >
+                  <option value="unknown">Unknown</option>
+                  <option value="false">Enabled</option>
+                  <option value="true">Bypassed</option>
+                </select>
               </label>
               <div className="channels">
                 {"ABCD".split("").map((ch) => (
@@ -774,9 +823,10 @@ function App() {
               </div>
               <small>
                 Editing channel {channel}. Scene {scene}:{" "}
-                {selectedScene?.channels?.[node.id] ??
-                  node.active_channel ??
-                  "A"}{" "}
+                {String(
+                  sceneSetting(design, node, scene, "active_channel") ??
+                    "Unknown",
+                )}{" "}
                 active.
               </small>
               <label>
@@ -879,11 +929,10 @@ function App() {
               <label>
                 Channel for this scene
                 <select
-                  value={
-                    selectedScene?.channels?.[node.id] ??
-                    node.active_channel ??
-                    "A"
-                  }
+                  value={String(
+                    sceneSetting(design, node, scene, "active_channel") ??
+                      "unknown",
+                  )}
                   onChange={(e) => {
                     const scenes = [...(design.scenes ?? [])];
                     let s = scenes.find((s) => s.number === scene);
@@ -901,6 +950,9 @@ function App() {
                     });
                   }}
                 >
+                  <option value="unknown" disabled>
+                    Unknown
+                  </option>
                   {"ABCD".split("").map((c) => (
                     <option key={c}>{c}</option>
                   ))}
@@ -955,6 +1007,16 @@ function App() {
           )}
         </aside>
       </div>
+      <ChatPanel
+        key={context.project}
+        project={context.project}
+        revision={revision}
+        dirty={dirty}
+        selected={selected}
+        analysisId={analysis?.id ?? analysis?.analysis_id}
+        request={api}
+        onAccepted={async () => accept(await api("state"))}
+      />
       <section className="audio-panel">
         <div>
           <h2>Reference & audition</h2>

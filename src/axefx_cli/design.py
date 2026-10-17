@@ -44,8 +44,10 @@ def validate_design(design):
         for key, maximum in [('label', 120), ('rationale', 2000), ('model', 200), ('model_parameter', 100)]:
             require(node.get(key) is None or isinstance(node[key], str) and len(node[key]) <= maximum,
                     'INVALID_DESIGN', 'Invalid node text field', field=key)
-        require(type(node.get('bypass', False)) is bool, 'INVALID_DESIGN', 'bypass must be boolean')
-        require(node.get('active_channel', 'A') in ('A', 'B', 'C', 'D'), 'INVALID_CHANNEL', 'Active channel must be A–D')
+        require(node.get('bypass') is None or type(node['bypass']) is bool,
+                'INVALID_DESIGN', 'bypass must be boolean or unknown (null)')
+        require(node.get('active_channel') in (None, 'A', 'B', 'C', 'D'),
+                'INVALID_CHANNEL', 'Active channel must be A–D or unknown (null)')
         require(isinstance(node.get('parameters', {}), dict) and isinstance(node.get('channels', {}), dict),
                 'INVALID_DESIGN', 'parameters and channels must be objects')
         require(set(node.get('channels', {})) <= set('ABCD'), 'INVALID_CHANNEL', 'Channels use A–D')
@@ -118,6 +120,10 @@ class Designs:
         design = validate_design(design)
         with self.store.lock('design-revisions'):
             head = self.get(project)
+            if head['design'].get('captured'):
+                for field in ('captured', 'target', 'captured_at', 'mode'):
+                    require(design.get(field) == head['design'].get(field), 'CAPTURE_CHANGED',
+                            'Captured evidence cannot be changed by a draft revision', field=field)
             require(head['revision'] == base, 'REVISION_CONFLICT', 'Draft is stale; inspect current revision before merging', current_revision=head['revision'])
             artifact = self.store.put('designs', {'kind': 'design_revision', 'project': project, 'parent': base, 'design': design})
             atomic_write(self.path(project), {'project': project, 'revision': artifact['id']})
@@ -136,7 +142,7 @@ def from_capture(state):
         if b.get('position') is None:
             continue
         channels = {ch: {name: v['value'] for name, v in content['parameters'].items() if v.get('value') is not None}
-                    for ch, content in b['channels'].items()}
+                    for ch, content in (b.get('channels') or {}).items()}
         d['nodes'].append({'id': b['ref'], 'type': b['type'], 'label': b['ref'], 'hardware_ref': b['ref'],
                            'position': copy.deepcopy(b['position']), 'channels': channels,
                            'parameters': {}, 'bypass': b['bypass'], 'active_channel': b['active_channel']})
@@ -211,6 +217,8 @@ def compile_design(design, backend_name='usb', capabilities=None):
             if backend_name == 'replay':
                 gaps.insert(0, 'replay cannot apply edits')
             raise AxeError('PROTOCOL_UNRESOLVED', 'Automatic hardware construction has not passed its protocol gates', missing=gaps)
+        require(all(n.get('bypass', False) is not None and n.get('active_channel', 'A') is not None for n in d['nodes']),
+                'UNKNOWN_SETTINGS', 'Resolve unknown bypass and channel values before mock compilation')
         ops, mapping, used = [], {}, set()
         original_nodes = {}
         if d.get('mode', 'new') == 'refine':

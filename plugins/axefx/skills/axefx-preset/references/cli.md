@@ -159,3 +159,8 @@ the destination backup. Restoration does not silently undo stored-slot changes.
 fresh preview. `APPLY_FAILED`: read the returned journal, completed/attempted
 operations and restore status; never assert that the preset is unchanged when
 restoration is unresolved. Previously attempted plans cannot be replayed.
+
+For UI-first real-device use, run `python tools/axefx.py --state-dir PATH ui`.
+The backend captures automatically after opening the browser. `ui --no-browser`
+prints its session URL; `design open PROJECT_ID` reopens an existing project.
+The UI includes a separate Codex conversation with reviewed, draft-only changes.

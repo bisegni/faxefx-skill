@@ -87,3 +87,36 @@ def test_audio_upload_runs_local_worker_and_returns_measurements(server, tmp_pat
     assert job['status'] == 'completed', job
     assert abs(job['result']['data']['measurements']['spectral_centroid_hz'] - 440) < 5
     assert not (s.store.root / 'mock-device.json').exists()
+
+
+def test_ui_starts_without_project_then_captures_and_keeps_prior_on_failure(tmp_path, monkeypatch):
+    from axefx_cli.backends import MockBackend
+    from axefx_cli.errors import AxeError
+    from test_device_session import ReadDevice
+    store = Store(tmp_path)
+    state = MockBackend(store).read_state()
+    state['device']['simulated'] = False
+    monkeypatch.setattr('axefx_cli.device_session.Store', lambda: store)
+    device = ReadDevice(state)
+    s = Workbench(store, device_factory=lambda *_: device)
+    thread = threading.Thread(target=s.serve_forever, daemon=True); thread.start()
+    try:
+        initial = json.load(request(s, '/api/state'))
+        assert initial['project'] is None and initial['design'] is None
+        json.load(request(s, '/api/device/capture', {}))
+        s.device.worker.join(timeout=3)
+        captured = json.load(request(s, '/api/state'))
+        assert captured['project'] and captured['device_session']['status'] == 'ready'
+        device.error = AxeError('USB_TIMEOUT', 'Disconnected')
+        json.load(request(s, '/api/device/capture', {}))
+        s.device.worker.join(timeout=3)
+        failed = json.load(request(s, '/api/state'))
+        assert failed['project'] == captured['project'] and failed['device_session']['status'] == 'disconnected'
+        assert failed['design'] == captured['design']
+        assert json.load(request(s, '/api/chat'))['status'] == 'offline'
+        with pytest.raises(urllib.error.HTTPError):
+            request(s, '/api/chat/connect', {'project': 'unrelated'})
+        with pytest.raises(urllib.error.HTTPError):
+            request(s, '/api/device/capture', {'input': 42})
+    finally:
+        s.shutdown(); s.server_close(); thread.join(timeout=2)

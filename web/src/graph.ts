@@ -5,8 +5,8 @@ export type DesignNode = {
   label?: string;
   parameters?: Record<string, Setting>;
   channels?: Record<string, Record<string, Setting>>;
-  bypass?: boolean;
-  active_channel?: string;
+  bypass?: boolean | null;
+  active_channel?: string | null;
   model?: string;
   model_parameter?: string;
   rationale?: string;
@@ -59,15 +59,21 @@ export function logicalPositions(
   const rows: Record<number, number> = {};
   const dryLevels = new Set<number>();
   for (const edge of d.edges) {
-    for (let level = levels[edge.from] + 1; level < levels[edge.to]; level++) dryLevels.add(level);
+    for (let level = levels[edge.from] + 1; level < levels[edge.to]; level++)
+      dryLevels.add(level);
   }
   return Object.fromEntries(
     d.nodes.map((n, i) => {
       const level = levels[n.id] ?? i;
       const row = rows[level] ?? 0;
       rows[level] = row + 1;
-        const lanes = dryLevels.has(level) ? [1, -1, 2, -2, 3, 0] : [0, 1, -1, 2, -2, 3];
-        return [n.id, n.ui_position ?? { x: level * 238, y: (lanes[row] ?? row) * 160 }];
+      const lanes = dryLevels.has(level)
+        ? [1, -1, 2, -2, 3, 0]
+        : [0, 1, -1, 2, -2, 3];
+      return [
+        n.id,
+        n.ui_position ?? { x: level * 238, y: (lanes[row] ?? row) * 160 },
+      ];
     }),
   );
 }
@@ -101,4 +107,24 @@ export function removeNode(d: Design, id: string): Design {
     })),
     modifiers: d.modifiers?.filter((m: any) => m.block !== id),
   };
+}
+
+// A partial USB capture only establishes values for its observed scene.
+export function sceneSetting(
+  d: Design,
+  n: DesignNode,
+  number: number,
+  field: "bypass" | "active_channel",
+): boolean | string | null {
+  const scene = d.scenes?.find((s) => s.number === number);
+  const values = field === "bypass" ? scene?.bypass : scene?.channels;
+  if (values && Object.hasOwn(values, n.id)) return values[n.id];
+  if (
+    d.captured &&
+    !d.captured.current.complete &&
+    number !== d.captured.current.active_scene
+  )
+    return null;
+  if (Object.hasOwn(n, field)) return n[field] ?? null;
+  return field === "bypass" ? false : "A";
 }

@@ -11,6 +11,9 @@ from .storage import load
 
 
 def register(groups):
+    ui = groups.add_parser('ui', help='Open the workbench and read the connected preset')
+    ui.add_argument('--port', type=int, default=0)
+    ui.add_argument('--no-browser', action='store_true')
     protocol = groups.add_parser('protocol').add_subparsers(dest='action', required=True)
     protocol.add_parser('coverage')
     command = protocol.add_parser('decode'); command.add_argument('--hex', required=True)
@@ -40,12 +43,16 @@ def register(groups):
 
 
 def offline(a):
-    return (a.group in ('protocol', 'audio') or
+    return (a.group in ('protocol', 'audio', 'ui') or
             a.group == 'catalog' and getattr(a, 'action', None) is not None or
             a.group == 'design' and a.action not in ('preview', 'capture'))
 
 
 def execute_local(a, store):
+    if a.group == 'ui':
+        from .workbench import serve
+        return serve(store, None, a.backend, a.port, not a.no_browser,
+                     input_name=a.input, output_name=a.output, replay_file=a.replay_file)
     if a.group == 'protocol':
         if a.action == 'coverage':
             return coverage()

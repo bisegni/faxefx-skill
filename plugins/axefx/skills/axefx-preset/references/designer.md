@@ -56,3 +56,18 @@ After an approved hardware build, import/analyze a recorded result and use
 and level-matching guidance, then propose another revision. User listening is
 the acceptance criterion; there is no automated tone-accuracy score or automatic
 reamping/search in this release.
+
+## Integrated UI entrypoint and chat
+
+Use `python tools/axefx.py --state-dir PATH ui` to open the browser first and read
+the current USB preset automatically. A project ID is not required. Existing
+`design open PROJECT_ID` reopens a stored project. The UI handles endpoint
+selection, retry, and refresh; captures are snapshots and never simulated
+fallbacks. Unknown bypass/channel data stays null through capture and exports.
+
+Embedded Codex chat (CLI 0.163.x) reads the shared design through host tools,
+streams replies, and stages draft proposals. Users accept/reject the exact
+differences. Only accepted proposals advance the revision; stale acceptance is
+rejected. The embedded agent has no device apply/save tool. Its scoped tools
+replace shell/CLI access. Messages and contextual summaries go to the configured
+AI service, while raw recordings stay local.

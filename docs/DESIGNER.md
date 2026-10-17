@@ -1,52 +1,93 @@
 # AI preset designer
 
-The skill guides the conversational AI. The Python backend stores revisions,
-compiles designs, analyzes local recordings, and owns MIDI. The browser edits the
-same designs through a loopback API; it has no device-apply endpoint.
+The Python backend reads the connected Axe-Fx, stores immutable captures and
+revisioned drafts, analyzes local recordings, and serves the browser. Embedded
+Codex chat uses draft-only application tools through the same services. External
+AI clients can continue using the CLI skill.
 
 ```text
-You -> AI + skill -> CLI --+--> shared Python services -> MIDI -> Axe-Fx
-You -> browser -> local API+         |
-                             revisioned artifacts
+Browser → Python backend → read-only USB capture → Axe-Fx III
+   │             │
+   └→ chat → Codex App Server → scoped draft tools
+                 │
+          review proposal → accept revision
 ```
 
 ## Start the workbench
 
-From the checkout, prepare the ordinary Python environment as described in the
-README. Build the optional browser interface once:
+Prepare Python as described in the README, then build the browser interface:
 
 ```sh
 cd web
 npm ci
 npm run build
 cd ..
-.venv-cli/bin/python tools/axefx.py --backend mock --state-dir .local/studio design create --name "Studio Clean"
+.venv-cli/bin/python tools/axefx.py --state-dir .local/studio ui
 ```
 
-Use the returned project ID in subsequent commands. Keep the same state directory.
-For a richer authored example, use `design import --file
-docs/examples/clean-space.design.json` instead. It includes parallel wet branches
-and two scenes and is explicitly simulation-only.
+Connect your Axe-Fx III by USB and select the desired preset on the device.
+`ui` defaults to USB, opens the browser before capture, and automatically reads
+the current preset. No project ID or separate capture command is required.
+`--input` and `--output` before `ui` can select exact endpoint names. Ambiguous
+endpoints require a selection in the UI; errors never fall back to simulation.
 
-```sh
-.venv-cli/bin/python tools/axefx.py --backend mock --state-dir .local/studio design open PROJECT_ID
-```
+The token-protected session runs on `127.0.0.1` until Ctrl+C. `ui --no-browser`
+prints its URL instead. The frontend serves local assets without a CDN. Closing
+the server stops audio jobs and its Codex subprocesses.
 
-This opens a session URL on `127.0.0.1` and keeps the process running until Ctrl+C.
-Use `--no-browser` to print the URL without opening it. The frontend is served
-locally; it does not load fonts, scripts, or audio from a CDN. A session token in
-the URL fragment protects API access. Closing the server cancels its audio jobs.
+The connection strip reports capture state, preset identity, active scene, and
+capture time. **Refresh from Axe-Fx** creates another project without deleting
+the previous one. Unsaved browser changes require a save/discard choice first.
+A failed refresh retains the previous capture, marked stale/disconnected.
+Device queries are serialized with CLI operations through the existing USB lock;
+no connection or device lock is held for the browser's lifetime. State polling
+does not poll MIDI. Refresh after changing the device.
 
-The canvas supports block/cable editing, undo/redo, an inspector, and forms for
-scenes, channels, controllers and modifiers, with advanced JSON for complete
-performance data. Double-click a cable to remove
-it. Logical canvas positions are independent of physical grid coordinates.
-Captured blocks retain their physical positions. The full JSON editor supports
-all draft scene/channel/modifier/controller fields exposed by `schema`.
+The canvas supports block/cable editing, undo/redo, block inspection, and
+scene/channel/controller/modifier forms. Double-click a cable to remove it.
+Logical positions are independent of physical grid coordinates. Captured
+shunts, wires, and unidentified effect blocks retain their real positions.
+Unknown bypass/channel values remain `null` and display as **Unknown**, including
+exports. Unobserved scene settings never inherit an observed scene as a fact.
 
-Save draft creates an immutable revision and advances a project head. Chat and
-browser edits share that head. A stale save returns `REVISION_CONFLICT`; the
-browser keeps the unsaved draft for downloading and explicit merging.
+Saving creates an immutable revision and advances a shared project head.
+Conflicts return `REVISION_CONFLICT` and preserve unsaved browser edits for
+download. Draft revisions cannot alter raw capture evidence or device identity.
+
+For an existing project, `design open PROJECT_ID` remains supported. An authored
+simulation example is available in `docs/examples/clean-space.design.json` for
+internal testing; it is not a hardware capture or hardware model recipe.
+
+## Chat inside the app
+
+Click **Connect Codex**. The backend starts `codex app-server --stdio` using the
+installed CLI and its configured model/sign-in. The tested protocol contract is
+Codex CLI **0.163.x**; other versions fail closed for chat without blocking
+inspection. Run `codex login` outside the app if authentication is missing.
+The workbench does not expose credentials or a general App Server proxy to HTTP.
+
+Send a message after saving your latest draft. The selected block and explicitly
+attached analysis summaries provide context. Responses stream into the panel;
+**Stop response** interrupts the active turn. A project stores its own conversation
+association and display history. Reloading the browser retains it; reconnecting
+Codex resumes the conversation. This is separate from any existing desktop chat.
+
+Codex can read the saved design/capture, protocol evidence, attached analysis
+summaries, and compile diagnostics. `tone_propose` stages revision-bound changes;
+it cannot save the draft itself. Review the before/after fields and choose
+**Accept draft changes** or **Reject changes**. Acceptance uses the existing
+revision lock/checks. Manual or external changes invalidate stale proposals.
+
+The agent session disables shell, external connectors/plugins, hooks, delegation,
+and browser/computer tools, and requests no execution environments plus a
+confirmed read-only sandbox. The code-mode host remains enabled to dispatch the
+scoped application tools. Host requests outside the draft-tool bridge are denied.
+No device-apply/save tool is provided. Required restrictions are checked at
+connection time; failed checks disable chat rather than widening permissions.
+
+Messages, relevant preset context, and analysis summaries are sent to the
+configured AI service. Raw audio stays local and is never attached automatically.
+Full USB design construction remains blocked regardless of the chat's proposals.
 
 ## AI and CLI workflow
 
@@ -70,9 +111,9 @@ approval before `edit apply PLAN_ID --approved`. A changed design revokes that
 preview even if the device is unchanged. Applying to mock is simulation, not a
 hardware build. Saving remains a separate approved `preset save` operation.
 
-There is no separate embedded AI provider or API key. The AI host reads the design
-and analysis artifacts, proposes a revision using the CLI, and explains its
-reasoning to the user. The browser is a companion to that conversation.
+External AI hosts read design/analysis artifacts and propose revisions using the
+CLI. Embedded Codex chat uses the scoped tools above and needs no separate
+provider/API-key configuration in this app.
 
 ## Design contract
 

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Design } from "./graph";
+import { sceneSetting, type Design } from "./graph";
 
 export function Performance({
   design,
@@ -132,9 +132,10 @@ export function Performance({
                     <td>
                       <select
                         aria-label={"Scene channel " + n.id}
-                        value={
-                          scene.channels?.[n.id] ?? n.active_channel ?? "A"
-                        }
+                        value={String(
+                          sceneSetting(design, n, number, "active_channel") ??
+                            "unknown",
+                        )}
                         onChange={(e) =>
                           scenePatch({
                             channels: {
@@ -144,25 +145,36 @@ export function Performance({
                           })
                         }
                       >
+                        <option value="unknown" disabled>
+                          Unknown
+                        </option>
                         {"ABCD".split("").map((c) => (
                           <option key={c}>{c}</option>
                         ))}
                       </select>
                     </td>
                     <td>
-                      <input
+                      <select
                         aria-label={"Scene bypass " + n.id}
-                        type="checkbox"
-                        checked={scene.bypass?.[n.id] ?? n.bypass ?? false}
+                        value={String(
+                          sceneSetting(design, n, number, "bypass") ??
+                            "unknown",
+                        )}
                         onChange={(e) =>
                           scenePatch({
                             bypass: {
                               ...scene.bypass,
-                              [n.id]: e.target.checked,
+                              [n.id]: e.target.value === "true",
                             },
                           })
                         }
-                      />
+                      >
+                        <option value="unknown" disabled>
+                          Unknown
+                        </option>
+                        <option value="false">Enabled</option>
+                        <option value="true">Bypassed</option>
+                      </select>
                     </td>
                   </tr>
                 ))}

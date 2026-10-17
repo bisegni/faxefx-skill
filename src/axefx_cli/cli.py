@@ -262,7 +262,9 @@ def main(argv=None):
         if offline(args):
             # Local authoring/analysis never enumerates or opens a MIDI endpoint.
             # Do not hold a USB lock while the workbench server is running.
-            data=execute_local(args,Store(args.state_dir));warnings=['Local design/analysis only. No MIDI traffic was sent.']
+            data=execute_local(args,Store(args.state_dir));warnings=(['UI session ended. Device reads may have sent MIDI queries; the UI sends no preset writes.']
+                if args.group == 'ui' or args.group == 'design' and args.action == 'open' else
+                ['Local design/analysis only. No MIDI traffic was sent.'])
         elif args.group in ('schema','catalog'):
             data=schemas() if args.group=='schema' else execute(args,None,None)
             warnings=[]
