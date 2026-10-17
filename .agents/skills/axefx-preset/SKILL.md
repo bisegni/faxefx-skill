@@ -1,6 +1,6 @@
 ---
 name: axefx-preset
-description: Inspect, design and modify Axe-Fx III presets by invoking the repository-local Python CLI, with geometry, connections, named parameters and user-approved previews.
+description: Inspect Axe-Fx III presets and design tones from descriptions or local recordings through the repository Python CLI, with revisioned visual drafts, routing diagrams and user-approved previews. Not for firmware or CAB/NAM uploads.
 ---
 
 Read the maintained workflow at

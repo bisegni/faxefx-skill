@@ -7,6 +7,12 @@ __pycache__/
 *.egg-info/
 /build/
 /dist/
+**/node_modules/
+/web/dist/
+/web/playwright-report/
+/web/test-results/
+/.playwright-cli/
+/output/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

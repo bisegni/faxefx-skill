@@ -20,7 +20,7 @@ class Engine:
         return {**self.store.put('snapshots',artifact),'scope':artifact['scope']}
 
     def normalize(self,operations):
-        require(isinstance(operations,list) and 1<=len(operations)<=256,'INVALID_PLAN','Provide 1–256 typed operations')
+        require(isinstance(operations,list) and 1<=len(operations)<=16384,'INVALID_PLAN','Provide 1–16384 typed operations')
         snapshots={};expanded=[]
         for op in operations:
             validate_operation(op)
@@ -43,7 +43,7 @@ class Engine:
                 'Saving needs a separate preview and approval after auditioning')
         return expanded,snapshots
 
-    def plan(self,operations):
+    def plan(self,operations,provenance=None):
         operations,snapshots=self.normalize(operations)
         self.backend.check_operations(operations)
         original=self.backend.read_state(operations)
@@ -52,6 +52,8 @@ class Engine:
               'created_at':time.time(),'base_fingerprint':digest(original),'operations':operations,
               'snapshot_refs':sorted(snapshots),'before':original,'after':predicted,'notes':notes,
               'verification':self.backend.capabilities()['verification']}
+        if provenance is not None:
+            plan['design_revision']=copy.deepcopy(provenance)
         artifact=self.store.put('plans',plan)
         return {**artifact,'approval_required':True,'operations':operations,'notes':notes,
                 'before':original['current'],'after':predicted['current'],
@@ -63,6 +65,11 @@ class Engine:
         # Approval is an acknowledgement by the caller, not cryptographic proof of a user event.
         require(approved,'APPROVAL_REQUIRED','The agent must obtain approval for this exact preview, then pass --approved',plan_id=key)
         plan=self.store.get('plans',key)
+        if 'design_revision' in plan:
+            from .design import Designs
+            source=plan['design_revision']
+            require(Designs(self.store).get(source['project'])['revision']==source['revision'],
+                    'REVISION_CONFLICT','Design changed after this preview; compile and approve the new revision')
         require(plan['backend']==self.backend.name and plan['identity']==self.backend.identity,
                 'DEVICE_CHANGED','Plan belongs to a different backend/device')
         require(self.backend.capabilities()['writes_enabled'],'READ_ONLY_BACKEND','This backend cannot apply edits')

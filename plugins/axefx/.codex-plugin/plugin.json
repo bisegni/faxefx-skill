@@ -1,7 +1,7 @@
 {
   "name": "axefx",
-  "version": "0.1.0",
-  "description": "Design Axe-Fx III presets through a Python CLI with named operations, previews, user approval, and recovery artifacts.",
+  "version": "0.2.0",
+  "description": "Design Axe-Fx III tones through shared AI/browser drafts, local audio analysis, capability-scoped previews, user approval, and recovery artifacts.",
   "skills": "./skills/",
   "interface": {
     "displayName": "Axe-Fx III Preset Assistant",

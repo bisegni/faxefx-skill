@@ -84,3 +84,34 @@ def test_plugin_and_skill_metadata():
     marketplace=json.loads((root/'.agents/plugins/marketplace.json').read_text())
     source=marketplace['plugins'][0]['source']['path'].removeprefix('./')
     assert (root/source/'.codex-plugin/plugin.json').is_file()
+
+
+def test_design_and_protocol_discovery_never_open_usb(tmp_path, capsys, monkeypatch):
+    import axefx_cli.backends as backends
+    monkeypatch.setattr(backends.USBBackend, 'connection', lambda *_: (_ for _ in ()).throw(AssertionError('USB opened by local authoring')))
+    prefix = ['--state-dir', str(tmp_path)]
+    assert main(prefix + ['design', 'create', '--name', 'A draft']) == 0
+    project = json.loads(capsys.readouterr().out)['data']['project']
+    assert main(prefix + ['design', 'compile', project]) == 0
+    compiled = json.loads(capsys.readouterr().out)['data']
+    assert not compiled['buildable'] and compiled['backend'] == 'usb'
+    assert compiled['blockers'][0]['code'] == 'PROTOCOL_UNRESOLVED'
+    assert main(prefix + ['protocol', 'decode', '--hex', 'f0 00 01 74 10 10 f7']) == 0
+    assert json.loads(capsys.readouterr().out)['data']['kind'] == 'tempo_push'
+
+
+def test_imported_catalog_queries_do_not_bind_symbols_by_numeric_coincidence(tmp_path, capsys):
+    from axefx_cli.storage import Store
+    artifact = Store(tmp_path).put('editor-catalogs', {'editor': {'version': 'authored'},
+        'definitions': {'firmware': {'major': 1, 'minor': 0}, 'effects': [
+            {'type_id': 13, 'parameters': [{'id': 1, 'labels': ['Authored choice'], 'special_record': False, 'editable_semantics_verified': False}]}]},
+        'symbols': {'ids': {'DISTORT_DRIVE': 1}}, 'warning': 'Unverified authored test'})
+    prefix = ['--state-dir', str(tmp_path), 'catalog', 'inspect-import', '--id', artifact['id']]
+    assert main(prefix) == 0
+    assert len(json.loads(capsys.readouterr().out)['data']['types']) == 1
+    assert main(prefix + ['--type', '13', '--parameter', '1']) == 0
+    assert json.loads(capsys.readouterr().out)['data']['parameter']['labels'] == ['Authored choice']
+    assert main(prefix + ['--type', '13', '--parameter', 'DISTORT_DRIVE']) == 2
+    assert json.loads(capsys.readouterr().out)['error']['code'] == 'SYMBOL_SCOPE_UNRESOLVED'
+    assert main(prefix + ['--symbol', 'DISTORT_DRIVE']) == 0
+    assert json.loads(capsys.readouterr().out)['data']['type_binding_verified'] is False

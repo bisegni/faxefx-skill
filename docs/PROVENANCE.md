@@ -9,6 +9,12 @@ version claim. Mock model names and parameter ranges are simulation choices.
 Numeric interoperability IDs do not make a complete hardware schema; USB writes
 remain restricted to the six recovered amp controls, still hardware-unverified.
 
+The optional `catalog import-editor` command stores user-selected installed
+editor/cache definitions in the local artifact store with source SHA-256 values.
+These local imports are not bundled catalog data and do not establish validated
+units, instance limits or device compatibility. Audio imports and model weights
+also stay in local state. Use an ignored state directory, never tracked source.
+
 `tests/fixtures/synthetic-traffic.jsonl` is authored deterministic test data,
 identified by its first metadata record. It contains no captured device bytes.
 Replay verifies file parsing and behavior, not real hardware interoperability.

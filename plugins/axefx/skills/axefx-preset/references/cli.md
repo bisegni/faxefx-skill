@@ -80,6 +80,12 @@ rather than assuming that every block calls its model selector `model`.
 
 ## Preview and apply
 
+For revisioned abstract designs, browser editing, editor/cache evidence imports,
+SVG/PNG setting sheets, and local audio references, read
+[the designer workflow](designer.md) and `docs/DESIGNER.md` in the checkout.
+These local tools never silently contact a device. `design preview` is the bridge
+to the existing exact-plan approval flow; `design compile` alone is diagnostic.
+
 Convenience commands always preview:
 
 ```sh

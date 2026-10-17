@@ -1,6 +1,6 @@
 ---
 name: axefx-preset
-description: Inspect, design, create, or modify Axe-Fx III presets through the axefx Python CLI, including grid geometry, block connections, parameters, scenes, channels, modifiers, and preset controllers. Use for tone requests and preset editing, not firmware or CAB/NAM uploads.
+description: Inspect Axe-Fx III presets, design tones from descriptions or local recordings, and refine revisioned block/cable drafts with a visual workbench through the Python CLI. Preview supported parameter, scene, channel, modifier and controller edits before approved application. Full automatic USB construction remains capability-gated. Not for firmware or CAB/NAM uploads.
 ---
 
 # Axe-Fx III presets
@@ -14,6 +14,11 @@ send raw SysEx, import transport internals, or invent parameter IDs or conversio
 Read [the CLI reference](references/cli.md) for commands, JSON proposals, setup,
 and recovery. Discover the contract with `python tools/axefx.py schema` and inspect
 `python tools/axefx.py capabilities` before advertising live operations.
+
+For an abstract design, audio-reference request, professional diagram, or browser
+canvas, read [the designer workflow](references/designer.md). The AI talks to the
+Python backend through structured CLI commands; the browser uses the same backend
+and revisions. Neither interface may invent wire formats or bypass approval.
 
 ## Workflow
 
@@ -75,6 +80,7 @@ changes, and obtain approval before applying it. Artifacts survive disconnects.
   inactive-channel contents, modifiers and controllers are unresolved and return
   explicit errors. Do not claim these are available because they work in mock.
 
-Never claim an exact recorded tone from parameter proposals alone; this tool does
-not listen to audio. Ask about guitar/pickups/monitoring only when it affects the
+Never claim an exact recorded tone from parameter proposals or audio measurements
+alone. Optional local audio analysis is not original-rig identification or audio
+synthesis. Ask about guitar/pickups/monitoring only when it affects the
 requested design. Device slots use numbers 0–1023; scenes use 1–8 and channels A–D.

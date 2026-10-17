@@ -36,6 +36,10 @@ def parser():
     groups=p.add_subparsers(dest='group',required=True)
     groups.add_parser('capabilities');groups.add_parser('schema')
     c=groups.add_parser('catalog');c.add_argument('--type');c.add_argument('--parameter')
+    c.add_argument('action', nargs='?', choices=('import-editor','inspect-import'))
+    c.add_argument('--app');c.add_argument('--cache');c.add_argument('--id');c.add_argument('--symbol')
+    from .design_commands import register
+    register(groups)
     def actions(name,names):
         root=groups.add_parser(name);sub=root.add_subparsers(dest='action',required=True)
         return {n:sub.add_parser(n) for n in names}
@@ -116,7 +120,14 @@ def command_operation(a):
 
 def schemas():
     return {'schema_version':SCHEMA_VERSION,'operations':{k:{'required':['op',*sorted(r)],'optional':sorted(o)} for k,(r,o) in FIELDS.items()},
-            'proposal':{'operations':'array of typed operations; 1–256 entries; saving must be a separate batch'},
+            'proposal':{'operations':'array of typed operations; 1–16384 entries; saving must be a separate batch'},
+            'design':{'design_version':'1.0','required':['design_version','name','nodes','edges'],
+                      'node':'id/type; optional label, parameters, channels A–D, model/model_parameter, bypass, position, rationale',
+                      'edge':'from/to stable node IDs', 'optional':['intent','mode','scenes','active_scene','modifiers','controllers','references','target','captured','unknowns'],
+                      'approval':'design compile is non-executable; design preview produces an immutable edit plan bound to the current design revision'},
+            'local_services':{'protocol':'coverage / inspect-editor','catalog':'import-editor / inspect-import',
+                              'design':'create / import / capture / inspect / revise / compile / preview / render / open',
+                              'audio':'import / analyze / inspect / compare'},
             'result':{'schema_version':'string','ok':'boolean','backend':'usb|mock|replay','data':'object on success','error':'code/message/details on failure','warnings':'array'},
             'coordinates':{'rows':'one-based 1–6','columns':'one-based 1–14','scenes':'1–8','channels':'A–D','preset_slots':'device numbers 0–1023'},
             'modifier_sources':SOURCES,'modifier_ids':[f'modifier{i}' for i in range(1,33)],'modifier_settings':sorted(MODIFIER_FIELDS),
@@ -129,6 +140,9 @@ def schemas():
 
 
 def execute(a,backend,store):
+    if a.group=='design':
+        from .design_commands import execute_device
+        return execute_device(a,backend,store)
     engine=Engine(backend,store)
     if a.group=='capabilities':return backend.capabilities()
     if a.group=='schema':return schemas()
@@ -244,7 +258,12 @@ def main(argv=None):
     try:
         args=parser().parse_args(argv)
         # Pure discovery commands have no device or artifact-store side effects.
-        if args.group in ('schema','catalog'):
+        from .design_commands import offline, execute_local
+        if offline(args):
+            # Local authoring/analysis never enumerates or opens a MIDI endpoint.
+            # Do not hold a USB lock while the workbench server is running.
+            data=execute_local(args,Store(args.state_dir));warnings=['Local design/analysis only. No MIDI traffic was sent.']
+        elif args.group in ('schema','catalog'):
             data=schemas() if args.group=='schema' else execute(args,None,None)
             warnings=[]
         else:

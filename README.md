@@ -39,6 +39,19 @@ explicit mock request: “Inspect my preset and preview a warmer clean tone.”
 
 ## Capabilities and limits
 
+The optional **Tone workbench** adds shared AI/browser design revisions, editable
+blocks and cables, deterministic logical/physical previews, block setting sheets,
+and local audio-reference measurements. The Python backend serves both interfaces;
+the browser never applies MIDI edits. See [the designer guide](docs/DESIGNER.md)
+for setup, examples, protocol coverage and exact hardware gates.
+
+```sh
+python tools/axefx.py protocol coverage
+python tools/axefx.py --backend mock --state-dir .local/studio design create --name "Studio Clean"
+# Use the returned project ID; build web/ as documented before opening the UI.
+python tools/axefx.py --backend mock --state-dir .local/studio design open PROJECT_ID
+```
+
 Mock supports preset geometry, routing, named parameters, scenes, channels,
 modifiers, controllers and save/restore using the small authored catalog. Replay
 reads replies from a selected file; the bundled example is synthetic test data.
@@ -103,4 +116,9 @@ Cross-platform CI is configured; remote execution is unverified.
 | pytest | `>=8,<10`, development only | [pytest](https://docs.pytest.org/) | Mock/replay test runner. |
 | PyYAML | `>=6,<7`, development only | [PyYAML](https://pyyaml.org/) | Skill metadata validation. |
 | Fractal USB/MIDI driver | platform/vendor-specific | [Fractal downloads](https://www.fractalaudio.com/axe-fx-iii-downloads/) | Windows device access; CLI does not install drivers. |
+| React / React Flow | locked in `web/package-lock.json` | [React](https://react.dev/) / [React Flow](https://reactflow.dev/) | Optional local visual designer. |
+| Vite / TypeScript / Vitest | locked in `web/package-lock.json` | [Vite](https://vite.dev/) / [TypeScript](https://www.typescriptlang.org/) / [Vitest](https://vitest.dev/) | Frontend build and graph tests. |
+| NumPy / SciPy / soundfile | optional audio requirements | [NumPy](https://numpy.org/) / [SciPy](https://scipy.org/) / [soundfile](https://python-soundfile.readthedocs.io/) | Local audio decoding and measurements. |
+| audio-separator | optional separation requirements | [maintainer repository](https://github.com/uziproj/audio-separator) | Local guitar stem extraction; model inference needs separate acceptance. |
+| Pillow | optional visual requirements | [Pillow](https://pillow.readthedocs.io/) | CLI PNG export without a native Cairo dependency. |
 

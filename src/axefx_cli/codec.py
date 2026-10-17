@@ -96,6 +96,66 @@ def public_queries():
         'amp1_channel': frame(0x0b, seven(58, 2) + b'\x7f'),
     }
 
+
+def decode_public(message, direction='rx'):
+    """Offline public message decoder, including documented checksumless pushes.
+
+    This does not change the USB transport's exact packet allowlist. Push data
+    is documented for DIN MIDI; decoding it establishes no USB streaming support.
+    """
+    if direction not in ('rx', 'tx'):
+        raise ValueError('direction must be rx or tx')
+    if direction == 'rx' and message[:5] == HEADER and message[-1:] == b'\xf7':
+        if len(message) == 7 and message[5] == 0x10:
+            return {'kind': 'tempo_push', 'checksum': False, 'transport': 'DIN documented; USB unverified'}
+        if len(message) == 10 and message[5] == 0x11:
+            note, string, cents = message[6:9]
+            if note > 11 or string > 5 or cents > 127:
+                raise ValueError('invalid tuner push')
+            return {'kind': 'tuner_push', 'note': note, 'string': string, 'cents': cents - 63, 'checksum': False}
+    command, payload = unframe(message)
+    names = {10: 'bypass', 11: 'channel', 12: 'scene', 13: 'preset_name', 14: 'scene_name',
+             15: 'looper', 16: 'tap_tempo', 17: 'tuner', 19: 'status', 20: 'tempo'}
+    if command not in names:
+        raise ValueError('not a documented public opcode')
+    result = {'kind': names[command], 'opcode': command, 'direction': direction, 'checksum': True}
+    if command in (10, 11):
+        if len(payload) != 3:
+            raise ValueError('invalid effect state payload')
+        result.update(effect=integer(payload[:2]), value=payload[2])
+    elif command in (12, 15, 17):
+        if len(payload) != 1:
+            raise ValueError('invalid state payload')
+        result['value'] = payload[0]
+    elif command == 16:
+        if payload:
+            raise ValueError('tap tempo has no payload')
+    elif command == 20:
+        if len(payload) != 2:
+            raise ValueError('invalid tempo payload')
+        result['value'] = integer(payload)
+    elif command in (13, 14):
+        prefix = 2 if command == 13 else 1
+        if direction == 'tx':
+            if len(payload) != prefix:
+                raise ValueError('invalid name query')
+            result['index'] = integer(payload)
+        else:
+            if len(payload) != prefix + 32:
+                raise ValueError('invalid name reply')
+            result.update(index=integer(payload[:prefix]), name=payload[prefix:].split(b'\0', 1)[0].decode('ascii', 'replace'))
+    elif command == 19:
+        if direction == 'tx':
+            if payload:
+                raise ValueError('status query has no payload')
+        else:
+            if len(payload) % 3:
+                raise ValueError('invalid status records')
+            result['effects'] = [{'effect': integer(payload[i:i+2]), 'bypass': bool(payload[i+2] & 1),
+                                  'channel_index': (payload[i+2] >> 1) & 7, 'channel_count': (payload[i+2] >> 4) & 7}
+                                 for i in range(0, len(payload), 3)]
+    return result
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--decode', help='decode a hexadecimal editor packet')
