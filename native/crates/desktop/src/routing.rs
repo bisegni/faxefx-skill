@@ -137,7 +137,7 @@ pub fn auto_layout(snapshot: &Snapshot, size: Size) -> BTreeMap<String, (f32, f3
     let max_columns = ((usable_w + 12.) / (min_width + 12.)).floor().max(1.) as usize;
     let columns = (max_rank + 1).min(max_columns).max(1);
     let display_rank = |rank: usize| {
-        if max_rank + 1 <= columns {
+        if max_rank < columns {
             rank
         } else {
             rank * (columns - 1) / max_rank.max(1)
