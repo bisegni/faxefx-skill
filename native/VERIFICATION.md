@@ -5,7 +5,7 @@ Automated implementation checks and manual/hardware acceptance are separate.
 | Check | Evidence |
 | --- | --- |
 | Existing Python/frontend baseline | 110 Python tests, 5 frontend tests and frontend production build passed before native integration |
-| Rust workspace | 39 passed; frozen-worker integration test ignored by default and passed separately |
+| Rust workspace | 43 passed, 1 frozen-worker integration test ignored by default; workspace tests and check passed for the current candidate |
 | Rust quality | rustfmt and strict Clippy passed; final run recorded with candidate |
 | Adapter contracts | Both providers exercised through deterministic subprocess fixtures, including explicit skill handshake, scoped tools, interruption and provider boundaries |
 | Real Codex | Installed 0.163.0 explicitly initialized skill, inspected authored mock; a second run changed only mock gain 5→6.2 with readback, then restored 5 |
@@ -18,6 +18,19 @@ Automated implementation checks and manual/hardware acceptance are separate.
 | Hardware Save/Restore | Unavailable; setter context/modifier protection and save/reload gate unresolved |
 | Minimum size/DPI/accessibility | Layout constraints tested; real display-scale acceptance pending; toolkit content currently lacks an AX widget tree |
 | Windows/Linux | CI matrix configured; remote results are separate evidence |
+
+## Catalogued block parameters
+
+The current implementation embeds static Axe-Edit 1.15.00 names and parameter
+IDs for 174 block instances across 42 families. On USB capture it requests every
+catalogued parameter for each recognized placed block. The inspector shows the
+human-readable name, returned text or raw number, and per-row read status; the
+session and block agent tools receive the same snapshot. Unknown block IDs stay
+unmapped. Only the existing eight amp getters have verified getter semantics;
+other parameter reads are raw and unverified, and are never exposed as editable
+controls. A physical Axe-Fx read-only test of these generic getters is still
+required. The app was not opened by the implementation agent; the user will
+perform manual testing.
 
 The minimum client area is 1280×850 logical pixels. Screenshot smoke used a larger
 window and does not prove all DPI or minimum-size combinations. The native image
