@@ -142,6 +142,7 @@ impl Studio {
             return Task::none();
         };
         let namespace = snapshot.context.target.namespace().to_owned();
+        let endpoints = self.input.clone().zip(self.output.clone());
         self.device_busy = true;
         self.attached.clear();
         self.history_namespace = namespace.clone();
@@ -153,7 +154,12 @@ impl Studio {
         Task::perform(
             blocking(move || {
                 let mut b = backend.lock().map_err(|_| "Backend unavailable")?;
-                b.bind(snapshot)?;
+                if snapshot.context.target == axe_domain::Target::Hardware {
+                    let (input, output) = endpoints.ok_or("Select the captured USB endpoints")?;
+                    b.bind_hardware(snapshot, input, output)?;
+                } else {
+                    b.bind(snapshot)?;
+                }
                 Ok(RuntimeView {
                     snapshot: b.snapshot.clone(),
                     history: b.history(&namespace)?,
@@ -389,7 +395,11 @@ impl Studio {
                 ));
             }
             Message::SaveDialog => {
-                if !self.agent_busy && !self.device_busy {
+                if !self.agent_busy && !self.device_busy && !self.recovery && self.snapshot.is_some() {
+                    if let Some(snapshot) = &self.snapshot
+                        && snapshot.context.target == axe_domain::Target::Hardware {
+                        self.destination = snapshot.context.preset.to_string();
+                    }
                     self.save_dialog = true;
                 }
             }
@@ -397,6 +407,9 @@ impl Studio {
                 self.destination = s.chars().filter(char::is_ascii_digit).take(4).collect()
             }
             Message::ConfirmSave => {
+                if !self.save_dialog || self.device_busy || self.agent_busy || self.recovery {
+                    return Some(Task::none());
+                }
                 let Ok(slot) = self.destination.parse::<u16>() else {
                     self.status = "Choose an explicit destination from 0 to 1023.".into();
                     return Some(Task::none());
@@ -410,6 +423,8 @@ impl Studio {
                 };
                 self.device_busy = true;
                 self.save_dialog = false;
+                let epoch = self.epoch;
+                self.status = "Checking device context and saving to the selected destination…".into();
                 return Some(Task::perform(
                     blocking(move || {
                         backend
@@ -417,8 +432,23 @@ impl Studio {
                             .map_err(|_| "Backend unavailable")?
                             .save(slot)
                     }),
-                    Message::DeviceResult,
+                    move |result| Message::SaveResult(epoch, result),
                 ));
+            }
+            Message::SaveResult(epoch, result) => {
+                if epoch != self.epoch { return Some(Task::none()); }
+                self.device_busy = false;
+                self.status = match result {
+                    Ok(axe_runtime::SaveOutcome::MockVerified) => {
+                        if self.pending.is_some() { self.resolve_pending = true; }
+                        "Test mock preset saved and verified. No hardware mutation was sent.".into()
+                    }
+                    Ok(axe_runtime::SaveOutcome::HardwareSentUnverified { destination }) => format!(
+                        "Store request sent once to Axe-Fx preset {destination}. Verify persistence on the device; no automatic reload or retry was performed."
+                    ),
+                    Err(e) => e,
+                };
+                return Some(self.refresh_runtime());
             }
             Message::DeviceResult(result) => {
                 self.device_busy = false;

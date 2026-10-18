@@ -12,12 +12,18 @@ use std::{
     sync::{Arc, Mutex},
 };
 pub type Shared = Arc<Mutex<Backend>>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveOutcome {
+    MockVerified,
+    HardwareSentUnverified { destination: u16 },
+}
 pub struct Backend {
     pub root: PathBuf,
     _lock: std::fs::File,
     pub store: Store,
     pub snapshot: Option<Snapshot>,
     session: Option<Session<Mock>>,
+    hardware_endpoints: Option<(String, String)>,
     attached: BTreeSet<String>,
 }
 impl Backend {
@@ -41,10 +47,12 @@ impl Backend {
             store,
             snapshot: None,
             session: None,
+            hardware_endpoints: None,
             attached: BTreeSet::new(),
         })))
     }
     pub fn bind(&mut self, snapshot: Snapshot) -> Result<(), String> {
+        self.hardware_endpoints = None;
         self.store
             .set_setting("last_namespace", snapshot.context.target.namespace())
             .map_err(err)?;
@@ -83,6 +91,19 @@ impl Backend {
         );
         Ok(())
     }
+    pub fn bind_hardware(
+        &mut self,
+        snapshot: Snapshot,
+        input: String,
+        output: String,
+    ) -> Result<(), String> {
+        if snapshot.context.target != Target::Hardware || input.is_empty() || output.is_empty() {
+            return Err("Hardware save requires a hardware capture and selected endpoints".into());
+        }
+        self.bind(snapshot)?;
+        self.hardware_endpoints = Some((input, output));
+        Ok(())
+    }
     pub fn library(&self) -> Result<axe_audio::artifact::Library, String> {
         axe_audio::artifact::Library::open(self.root.join("audio"))
     }
@@ -97,7 +118,7 @@ impl Backend {
             .is_some_and(Session::recovery_required)
     }
     pub fn capabilities(&self) -> Value {
-        json!({"target":self.snapshot.as_ref().map(|s|s.context.target),"parameter_batches":self.session.is_some()&&!self.recovery(),"restore_original":self.session.is_some()&&!self.recovery(),"save_tone":self.session.is_some()&&!self.recovery(),"structural_routing":false,"hardware_writes":false,"hardware_save_reason":"Device setter profiles, modifier protection, backup and save/reload have not passed hardware verification","parameter_baseline_is_full_backup":false,"parameter_catalog":axe_session::usb::catalog_info()})
+        json!({"target":self.snapshot.as_ref().map(|s|s.context.target),"parameter_batches":self.session.is_some()&&!self.recovery(),"restore_original":self.session.is_some()&&!self.recovery(),"save_tone":(self.session.is_some()||self.hardware_endpoints.is_some())&&!self.recovery(),"structural_routing":false,"hardware_writes":self.hardware_endpoints.is_some(),"hardware_parameter_writes":false,"hardware_preset_store":self.hardware_endpoints.is_some(),"hardware_save_verification":"Store is user-operated and sent once after context preflight; persistence requires manual verification","parameter_baseline_is_full_backup":false,"parameter_catalog":axe_session::usb::catalog_info()})
     }
     pub fn adjust(
         &mut self,
@@ -130,12 +151,68 @@ impl Backend {
         result.map_err(err)?;
         Ok(s.confirmed.clone())
     }
-    pub fn save(&mut self, slot: u16) -> Result<(), String> {
-        self.session
-            .as_mut()
-            .ok_or("Hardware save/reload semantics are unresolved; Save tone is unavailable")?
-            .save_mock(slot)
-            .map_err(err)
+    pub fn save(&mut self, slot: u16) -> Result<SaveOutcome, String> {
+        if slot > 1023 {
+            return Err("Preset destination must be 0–1023".into());
+        }
+        if let Some(session) = self.session.as_mut() {
+            session.save_mock(slot).map_err(err)?;
+            return Ok(SaveOutcome::MockVerified);
+        }
+        let (input, output) = self
+            .hardware_endpoints
+            .clone()
+            .ok_or("Read USB with selected endpoints before saving")?;
+        self.hardware_save(slot, |snapshot, before| {
+            axe_session::usb::store_preset(&input, &output, snapshot, slot, before)
+        })
+    }
+    fn hardware_save(
+        &self,
+        slot: u16,
+        send: impl FnOnce(&Snapshot, &mut dyn FnMut() -> Result<(), String>) -> Result<(), String>,
+    ) -> Result<SaveOutcome, String> {
+        let snapshot = self.snapshot.as_ref().ok_or("No captured preset to save")?;
+        if slot > 1023
+            || snapshot.context.target != Target::Hardware
+            || self.hardware_endpoints.is_none()
+            || self.recovery()
+        {
+            return Err("Hardware preset save is unavailable in this context".into());
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let event = |status: &str, detail: Option<&str>| {
+            self.store.event("hardware", &json!({"kind":"preset_store","id":id,"context":snapshot.context,"destination":slot,"status":status,"detail":detail,"persistence_verified":false}).to_string()).map_err(err)
+        };
+        event("prepared", None)?;
+        let mut attempted = false;
+        let result = send(snapshot, &mut || {
+            event("sending", None)?;
+            attempted = true;
+            Ok(())
+        });
+        let status = match (&result, attempted) {
+            (Ok(()), true) => "sent_unverified",
+            (Err(_), true) => "uncertain",
+            _ => "not_sent",
+        };
+        event(status, result.as_ref().err().map(String::as_str)).map_err(|e| {
+            format!("Store status could not be journaled; delivery may be uncertain: {e}")
+        })?;
+        result?;
+        if !attempted {
+            return Err(
+                "Save transport did not record an intent; no verified result is available".into(),
+            );
+        }
+        Ok(SaveOutcome::HardwareSentUnverified { destination: slot })
+    }
+    pub fn select_scene(&mut self, scene: u8) -> Result<Snapshot, String> {
+        let s = self.session.as_mut().ok_or("Scene selection unavailable")?;
+        let context = s.confirmed.context.clone();
+        let snapshot = s.select_scene(&context, scene).map_err(err)?;
+        self.snapshot = Some(snapshot.clone());
+        Ok(snapshot)
     }
     pub fn history(&self, namespace: &str) -> Result<Vec<ChatMessage>, String> {
         self.store.messages(namespace).map_err(err)
@@ -221,7 +298,7 @@ impl Backend {
                     .map(|s| json!({"status":"verified","snapshot":s}))
             }
             "transaction_status" => Ok(
-                json!({"dirty":self.dirty(),"recovery_required":self.recovery(),"transactions":self.snapshot.as_ref().map(|s|self.store.transaction_summaries(&s.context)).transpose().map_err(err)?}),
+                json!({"dirty":self.dirty(),"recovery_required":self.recovery(),"transactions":self.snapshot.as_ref().map(|s|self.store.transaction_summaries(&s.context)).transpose().map_err(err)?,"application_events":self.snapshot.as_ref().map(|s|self.store.recent_events(s.context.target.namespace())).transpose().map_err(err)?}),
             ),
             _ => Err("Tool not exposed by Axe Studio".into()),
         }
@@ -366,6 +443,84 @@ mod tests {
             assert!(!b.dirty());
         }
         drop(b);
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn user_save_keeps_mock_verification_separate_from_hardware_transmission() {
+        let root = std::env::temp_dir().join(format!("axe-save-{}", uuid::Uuid::new_v4()));
+        let shared = Backend::open(root.clone()).unwrap();
+        {
+            let mut backend = shared.lock().unwrap();
+            let mut snapshot = Mock::default().snapshot().unwrap();
+            backend.bind(snapshot.clone()).unwrap();
+            assert_eq!(backend.save(17).unwrap(), SaveOutcome::MockVerified);
+            snapshot.context.target = Target::Hardware;
+            backend.bind(snapshot.clone()).unwrap();
+            assert_eq!(backend.capabilities()["save_tone"], false);
+            assert!(backend.save(17).is_err());
+            backend
+                .bind_hardware(snapshot, "authored input".into(), "authored output".into())
+                .unwrap();
+            assert_eq!(backend.capabilities()["save_tone"], true);
+            let outcome = backend
+                .hardware_save(17, |_, before| {
+                    before()?;
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(
+                outcome,
+                SaveOutcome::HardwareSentUnverified { destination: 17 }
+            );
+            let events = backend.store.recent_events("hardware").unwrap();
+            let events: Vec<Value> = events
+                .iter()
+                .map(|v| serde_json::from_str(v).unwrap())
+                .collect();
+            assert_eq!(events[0]["status"], "sent_unverified");
+            assert_eq!(events[1]["status"], "sending");
+            assert_eq!(events[2]["status"], "prepared");
+            assert_eq!(events[0]["id"], events[2]["id"]);
+            assert_eq!(events[0]["persistence_verified"], false);
+            assert!(
+                backend
+                    .hardware_save(1024, |_, _| panic!("invalid slot must not reach wire"))
+                    .is_err()
+            );
+            backend
+                .hardware_save(18, |_, before| {
+                    before()?;
+                    Err("disconnected".into())
+                })
+                .unwrap_err();
+            let events = backend.store.recent_events("hardware").unwrap();
+            let last: Value = serde_json::from_str(&events[0]).unwrap();
+            assert_eq!(last["status"], "uncertain");
+        }
+        drop(shared);
+        let reopened = Backend::open(root.clone()).unwrap();
+        {
+            let backend = reopened.lock().unwrap();
+            assert!(backend.snapshot.is_none());
+            assert_eq!(backend.capabilities()["save_tone"], false);
+            assert_eq!(backend.store.recent_events("hardware").unwrap().len(), 6);
+        }
+        drop(reopened);
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn scene_selection_updates_mock_snapshot_without_hardware_transport() {
+        let root = std::env::temp_dir().join(format!("axe-scene-{}", uuid::Uuid::new_v4()));
+        let shared = Backend::open(root.clone()).unwrap();
+        {
+            let mut backend = shared.lock().unwrap();
+            backend.bind(Mock::default().snapshot().unwrap()).unwrap();
+            let selected = backend.select_scene(6).unwrap();
+            assert_eq!(selected.context.scene, Some(6));
+            assert_eq!(selected.scene_names.len(), 8);
+            assert_eq!(backend.snapshot.as_ref(), Some(&selected));
+        }
+        drop(shared);
         let _ = std::fs::remove_dir_all(root);
     }
 }

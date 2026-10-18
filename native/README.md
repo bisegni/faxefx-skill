@@ -38,9 +38,11 @@ providers cannot call them. Closing drains an active turn before reading dirty
 state and offers Save, Restore, Leave unsaved or Cancel when needed.
 
 See [CAPABILITIES.md](CAPABILITIES.md) for enforced support boundaries and
-[MAC_HANDOFF.md](MAC_HANDOFF.md) for the manual checklist. Hardware writes,
-hardware Save/Restore and optional guitar separation are unavailable. Mock Save
-persists a simulated destination and is not proof of device saving.
+[MAC_HANDOFF.md](MAC_HANDOFF.md) for the manual checklist. Hardware parameter writes,
+hardware Restore and optional guitar separation are unavailable. Hardware Save
+sends the recovered store request once to an explicitly selected destination after
+context checks; the app reports transmission with persistence unverified. Mock
+Save persists a simulated destination and is not proof of device saving.
 
 ## Build and verification
 

@@ -7,6 +7,9 @@ pub trait Transport: Send {
     fn snapshot(&mut self) -> Result<Snapshot, Error>;
     fn read(&mut self, block: &str, parameter: &str) -> Result<f64, Error>;
     fn write(&mut self, block: &str, parameter: &str, value: f64) -> Result<(), Error>;
+    fn select_scene(&mut self, _scene: u8) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChatMessage {
@@ -127,6 +130,17 @@ impl Store {
             )
             .map_err(storage)?;
         Ok(())
+    }
+    pub fn recent_events(&self, namespace: &str) -> Result<Vec<String>, Error> {
+        let mut query = self
+            .db
+            .prepare("SELECT event FROM app_events WHERE namespace=? ORDER BY seq DESC LIMIT 64")
+            .map_err(storage)?;
+        query
+            .query_map([namespace], |row| row.get(0))
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)
     }
     pub fn interrupt_streams(&self) -> Result<(), Error> {
         self.db
@@ -307,6 +321,24 @@ impl<T: Transport> Session<T> {
     }
     pub fn recovery_required(&self) -> bool {
         self.recovery
+    }
+    /// Select a scene after the caller has handled any dirty-session decision.
+    /// The resulting device context is read back before it becomes confirmed.
+    pub fn select_scene(&mut self, expected: &Context, scene: u8) -> Result<Snapshot, Error> {
+        if scene > 7 {
+            return Err(Error::InvalidValue);
+        }
+        self.context(expected)?;
+        self.transport.select_scene(scene)?;
+        let snapshot = self.transport.snapshot()?;
+        if snapshot.context.target != expected.target
+            || snapshot.context.preset != expected.preset
+            || snapshot.context.scene != Some(scene)
+        {
+            return Err(Error::Readback);
+        }
+        self.confirmed = snapshot.clone();
+        Ok(snapshot)
     }
     pub fn apply(&mut self, expected: &Context, id: &str, changes: &[Change]) -> Result<(), Error> {
         self.apply_guarded(expected, id, changes, || true)
@@ -542,6 +574,7 @@ impl Default for Mock {
                     target: Target::TestMock,
                 },
                 name: "Test mock — authored routing".into(),
+                scene_names: (1..=8).map(|n| format!("Scene {n}")).collect(),
                 blocks: vec![
                     Block {
                         id: "input1".into(),
@@ -635,6 +668,23 @@ impl Transport for Mock {
                 .map_err(storage)?;
             file.sync_all().map_err(storage)?;
             std::fs::rename(temp, path).map_err(storage)?;
+        }
+        Ok(())
+    }
+    fn select_scene(&mut self, scene: u8) -> Result<(), Error> {
+        if scene > 7 {
+            return Err(Error::InvalidValue);
+        }
+        self.state.context.scene = Some(scene);
+        self.state.context.generation = self.state.context.generation.saturating_add(1);
+        for block in &mut self.state.blocks {
+            if block.instance_id.is_some() {
+                block.channel = Some(scene % 4);
+            }
+        }
+        if let Some(path) = &self.state_path {
+            std::fs::write(path, serde_json::to_vec(&self.state).map_err(storage)?)
+                .map_err(storage)?;
         }
         Ok(())
     }
@@ -796,6 +846,27 @@ mod tests {
             .unwrap();
         assert_eq!(touched, 0);
         assert!(!s.dirty().unwrap());
+    }
+    #[test]
+    fn scene_selection_reads_back_scene_and_channel_state() {
+        let mut session = Session::connect(Mock::default(), Store::memory().unwrap()).unwrap();
+        let context = session.confirmed.context.clone();
+        let selected = session.select_scene(&context, 5).unwrap();
+        assert_eq!(selected.context.scene, Some(5));
+        assert_eq!(
+            selected
+                .blocks
+                .iter()
+                .find(|b| b.id == "amp1")
+                .unwrap()
+                .channel,
+            Some(1)
+        );
+        assert_eq!(session.confirmed, selected);
+        assert_eq!(
+            session.select_scene(&selected.context, 8),
+            Err(Error::InvalidValue)
+        );
     }
     #[test]
     fn saved_mock_starts_a_new_original_baseline() {

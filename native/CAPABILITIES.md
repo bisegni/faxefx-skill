@@ -11,6 +11,11 @@ playback. The bundled Python worker performs local measurements only.
   is unknown. Unknown effects/parameters are never guessed.
 - Test mock: serialized parameter batches with originals, readback, rollback,
   cancellation, Restore original and explicitly selected simulated Save destination.
+- Hardware Save tone: explicit overwrite destination (0–1023), captured endpoint
+  binding, repeated preset/scene/routing/channel preflight, durable request journal,
+  one store transmission and a 10-second settling window. The result is explicitly
+  **sent, persistence unverified**. Echoes are not acknowledgements; there is no
+  automatic retry, reload or mutation replay. Test on a backed-up disposable slot.
 - Codex: App Server 0.163.x, explicit bundled skill, isolated tools and streamed chat.
 - Claude: compatible headless 2.1.x (minimum 2.1.286), bare/restricted mode,
   authenticated loopback MCP and session-only API authentication. A supported
@@ -19,10 +24,17 @@ playback. The bundled Python worker performs local measurements only.
 - Local bounded audio import, waveform preview, playback, selected excerpts,
   attenuation-only A/B matching, measurements and explicit summary attachments.
 
-Hardware mutations, hardware original restoration, device Save/reload, structural
+Hardware parameter mutations, hardware original restoration, verified device
+Save/reload, structural
 routing edits and optional guitar separation are unavailable in this candidate.
 Hardware setter conversions alone do not establish firmware identity, modifier
 protection or complete backup/restoration. No fabricated save packet is sent.
 Physical verification is performed by the user; no physical write experiment was
 performed by the implementation agent. Windows/Linux hardware checks, all DPI and
 accessibility acceptance, and Developer ID signing/notarization remain separate.
+
+Static reverse engineering identifies editor operation `0x0026` inside outer
+command `0x01` as Axe-Edit's preset-store request, with the destination in the
+32-bit value field. It powers the user-operated Save action; acknowledgement handling
+and save/reload persistence remain unverified. See the
+[instruction trace and offline verifier](../docs/AXE_EDIT_STORE_PROTOCOL.md).

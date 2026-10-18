@@ -5,8 +5,8 @@ Automated implementation checks and manual/hardware acceptance are separate.
 | Check | Evidence |
 | --- | --- |
 | Existing Python/frontend baseline | 110 Python tests, 5 frontend tests and frontend production build passed before native integration |
-| Rust workspace | 43 passed, 1 frozen-worker integration test ignored by default; workspace tests and check passed for the current candidate |
-| Rust quality | rustfmt and strict Clippy passed; final run recorded with candidate |
+| Rust workspace | 51 passed, 1 frozen-worker integration test ignored by default; `cargo test --workspace --locked` passed |
+| Rust quality | `cargo fmt --all`, strict workspace Clippy, and `git diff --check` passed |
 | Adapter contracts | Both providers exercised through deterministic subprocess fixtures, including explicit skill handshake, scoped tools, interruption and provider boundaries |
 | Real Codex | Installed 0.163.0 explicitly initialized skill, inspected authored mock; a second run changed only mock gain 5→6.2 with readback, then restored 5 |
 | Real Claude | Installed 2.1.302 recognized; live run blocked by absent API credential; deterministic contract passed |
@@ -15,9 +15,18 @@ Automated implementation checks and manual/hardware acceptance are separate.
 | Package integrity | Debug package: 152 file hashes verified; frozen archive excludes legacy modules; release manifest accompanies final candidate |
 | Native UI smoke | All panes visible; mock manual gain change and Restore verified; explicit destination dialog; Codex initialization/streaming; WAV import/waveform and bundled analysis exercised |
 | USB | Fixed read queries implemented; no physical write experiment performed |
-| Hardware Save/Restore | Unavailable; setter context/modifier protection and save/reload gate unresolved |
+| Hardware Save/Restore | User-operated store transmission implemented with injected-wire tests; acknowledgement/persistence and physical acceptance pending. Hardware Restore remains unavailable. |
+| Scene selection | Eight named scenes are queried and displayed; documented scene selection plus active-scene readback is implemented. Mock path is tested; USB behavior awaits the user's hand acceptance. |
 | Minimum size/DPI/accessibility | Layout constraints tested; real display-scale acceptance pending; toolkit content currently lacks an AX widget tree |
 | Windows/Linux | CI matrix configured; remote results are separate evidence |
+
+Hardware store is tested with an injected wire only: exact `0x0026` packet and
+integer destination, checksum, duplicate/stale/malformed status, changed preset,
+scene and routing, failed intent persistence, preflight timeout, send/settling
+disconnect, one transmission without retry, durable sent/uncertain outcomes and
+restart without replay. The Save dialog uses an explicit overwrite destination;
+its hardware result never says persistence was verified. The app was not launched
+and no hardware command was sent by these checks.
 
 ## Catalogued block parameters
 
@@ -38,9 +47,13 @@ uses the approved dark material direction with recessed controls, effect accents
 vector icons, a dotted canvas and animated sagging cables. Local QA screenshot:
 `output/axe-studio-integrated.png`.
 
-The user will perform physical testing by hand. Hardware mutations remain disabled
-until protocol/capability and verified-backup gates pass; manual testing cannot
-exercise unsupported functions in this candidate. Optional guitar separation and
+The user will perform physical testing by hand. Parameter writes and preset
+Restore remain unavailable. Hardware Save sends operation `0x0026` once after
+durable intent and repeated context preflight. It reports transmission only,
+without clearing any hardware baseline or claiming verified persistence. Its
+acknowledgement contract and physical save/reload acceptance remain pending.
+Scene selection is separately implemented because its command
+and readback are documented, but has not been exercised on hardware here. Optional guitar separation and
 model download management remain unimplemented. No automated or mock result is
 hardware acceptance. Legacy code and main history are preserved.
 

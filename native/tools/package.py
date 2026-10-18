@@ -71,7 +71,9 @@ def main():
     manifest = {'version': 1, 'commit': commit, 'implementation_dirty': dirty,
                 'platform': sys.platform, 'architecture': platform.machine(), 'profile': profile,
                 'signing': 'Internal build; no Developer ID signing or notarization',
-                'hardware_writes': False, 'hardware_save': False, 'python': platform.python_version(),
+                'hardware_writes': True, 'hardware_parameter_writes': False, 'hardware_save': True,
+                'hardware_save_verification': 'User-operated store request; persistence awaits manual hardware acceptance',
+                'python': platform.python_version(),
                 'files': {str(p.relative_to(app)): hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in sorted(app.rglob('*')) if p.is_file()}}
     (resources / 'CAPABILITIES.md').write_text((root / 'native/CAPABILITIES.md').read_text())

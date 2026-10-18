@@ -1,4 +1,4 @@
-//! Read-only framing ported from codec.py/grid.py. No setters exposed.
+//! Axe-Fx III framing. Mutation packets are exposed only as typed operations.
 const HEADER: &[u8] = &[0xf0, 0, 1, 0x74, 0x10];
 pub fn frame(command: u8, payload: &[u8]) -> Result<Vec<u8>, String> {
     if command > 127 || payload.iter().any(|b| *b > 127) {
@@ -29,6 +29,18 @@ pub fn grid_query() -> Vec<u8> {
     p[0] = 0x2e;
     frame(1, &p).expect("static query")
 }
+/// Static Axe-Edit 1.15.00 store operation. Destination is integer bits, not f32.
+/// Producing this packet establishes neither delivery nor persistent storage.
+pub fn preset_store(destination: u16) -> Result<Vec<u8>, String> {
+    if destination > 1023 {
+        return Err("Preset destination must be 0–1023".into());
+    }
+    let mut payload = vec![0; 15];
+    payload[0] = 0x26;
+    payload[6] = (destination & 127) as u8;
+    payload[7] = (destination >> 7) as u8;
+    frame(1, &payload)
+}
 pub fn unpack(data: &[u8], length: usize) -> Result<Vec<u8>, String> {
     if data.len() != length.saturating_mul(8).div_ceil(7) || data.iter().any(|b| *b > 127) {
         return Err("Invalid packed bytes".into());
@@ -49,14 +61,14 @@ pub fn unpack(data: &[u8], length: usize) -> Result<Vec<u8>, String> {
     }
     Ok(out)
 }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Cell {
     pub row: u8,
     pub column: u8,
     pub instance: u16,
     pub inputs: u16,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Grid {
     pub slot: u16,
     pub name: String,

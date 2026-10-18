@@ -92,6 +92,9 @@ pub struct Block {
 pub struct Snapshot {
     pub context: Context,
     pub name: String,
+    /// Scene labels in device order (scene indices are zero-based).
+    #[serde(default)]
+    pub scene_names: Vec<String>,
     pub blocks: Vec<Block>,
     pub edges: Vec<(String, String)>,
 }

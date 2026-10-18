@@ -23,13 +23,18 @@ Open `Axe Studio.app`; it bundles the audio interpreter and dependencies.
    compare with level matching, inspect measurements and attach only selected
    summaries. Ordinary import/analysis stays local; attached summaries go to the
    selected provider when requested through app tools.
-7. Connect Axe-Fx for read-only routing/amp inspection. Unknown values must remain
-   unknown. Hardware Save, Restore and live edits must remain unavailable in this
-   candidate. Do not treat simulated Save as a restorable hardware backup.
+7. Connect Axe-Fx for routing/parameter inspection. Unknown values must remain
+   unknown. For hardware Save, first back up a disposable destination in Axe-Edit.
+   Press Save tone, check the explicit 0–1023 destination and confirm overwrite.
+   The application checks the captured context, journals and sends one store,
+   then waits 10 seconds. Confirm it reports **sent, persistence unverified**.
+   Verify the destination on the device, then manually reload it and confirm the
+   tone persists. Do not treat this request or a simulated Save as a backup.
+   Hardware Restore and live parameter edits remain unavailable.
 8. Check disconnects, provider failure, audio errors, keyboard access and display
    scaling. Report the exact step, provider version and visible error.
 
-Hardware parameter writes, hardware Save/reload/Restore, optional guitar separation,
+Hardware parameter writes, hardware Save persistence/acknowledgement and Restore, optional guitar separation,
 real Claude authentication, cross-platform physical checks and full accessibility
 remain open gates. Completing the checklist does not resolve the missing hardware
 implementation. No destructive cleanup, main replacement or history rewrite is

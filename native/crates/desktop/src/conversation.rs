@@ -277,9 +277,25 @@ impl Studio {
             ]
             .spacing(16)
         } else if self.save_dialog {
+            let hardware = self
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.context.target == axe_domain::Target::Hardware);
+            let destination_key = format!("mock.preset.{}", self.destination);
+            let replaces_existing = self
+                .store
+                .as_ref()
+                .and_then(|store| store.setting(&destination_key).ok().flatten())
+                .is_some();
             column![
                 text("Save tone to destination").size(20),
-                text("Test mock only. Hardware saving is unavailable.").size(13),
+                text(if hardware {
+                    format!("Axe-Fx III · overwrite device preset {} with the current edit buffer. Use a backed-up test destination for your manual verification. The store request is recovered from Axe-Edit; persistence is not yet hardware-verified.", self.destination)
+                } else if replaces_existing {
+                    format!("Test mock only · destination {} already exists and will be overwritten.", self.destination)
+                } else {
+                    format!("Test mock only · simulated destination {} will be created.", self.destination)
+                }).size(13),
                 text_input("Preset destination 0–1023", &self.destination)
                     .on_input(Message::Destination)
                     .padding(10),

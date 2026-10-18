@@ -55,6 +55,32 @@ impl Studio {
                     label("Device connection")
                 ]
                 .spacing(10);
+                if let Some(snapshot) = &self.snapshot {
+                    let active = snapshot.context.scene;
+                    let scenes = (0..8).map(|scene| {
+                        let name = snapshot
+                            .scene_names
+                            .get(scene as usize)
+                            .filter(|name| !name.is_empty())
+                            .cloned()
+                            .unwrap_or_else(|| format!("Scene {}", scene + 1));
+                        let caption = if active == Some(scene) {
+                            format!("● {}", name)
+                        } else {
+                            name
+                        };
+                        button(text(caption).size(12))
+                            .padding([7, 10])
+                            .style(style::neutral)
+                            .on_press_maybe(
+                                (active != Some(scene) && !self.device_busy)
+                                    .then_some(Message::SelectScene(scene)),
+                            )
+                            .into()
+                    });
+                    body = body.push(heading("Scenes"));
+                    body = body.push(row(scenes).spacing(5).wrap());
+                }
                 if let Some(ports) = &self.endpoints {
                     body = body
                         .push(
@@ -276,7 +302,7 @@ impl Studio {
                         {
                             "●  Simulated values · live controls"
                         } else {
-                            "●  Device capture · read-only"
+                            "●  Device capture · manual Save"
                         },
                     ));
                 } else {
@@ -362,7 +388,7 @@ impl Studio {
         let target = self.snapshot.as_ref().map(|s| s.context.target);
         let identity = match target {
             Some(axe_domain::Target::TestMock) => "●  Test mock",
-            Some(axe_domain::Target::Hardware) => "●  Axe-Fx III · read-only",
+            Some(axe_domain::Target::Hardware) => "●  Axe-Fx III · manual Save",
             None => "○  Device disconnected",
         };
         let name = self
@@ -403,11 +429,10 @@ impl Studio {
                     .padding([8, 18])
                     .style(style::primary)
                     .on_press_maybe(
-                        (self
-                            .snapshot
-                            .as_ref()
-                            .is_some_and(|s| s.context.target == axe_domain::Target::TestMock)
+                        (self.snapshot.is_some()
                             && !self.agent_busy
+                            && !self.device_busy
+                            && !self.busy
                             && !self.recovery)
                             .then_some(Message::SaveDialog)
                     )

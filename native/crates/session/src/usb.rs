@@ -1,4 +1,5 @@
-//! Read-only MIDI capture. The public API exposes no send/write operation.
+//! MIDI capture and explicit, typed user-operated device commands.
+mod store;
 use crate::protocol::{Grid, decode_grid, frame, grid_query, unframe};
 use axe_domain::*;
 use midir::{Ignore, MidiInput, MidiOutput};
@@ -7,6 +8,7 @@ use std::{
     sync::{OnceLock, mpsc},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+pub use store::{StoreWire, store_preset, store_preset_with};
 const EFFECT_IDENTITIES: &str = include_str!("../../../resources/axe-effects/identities.json");
 fn catalog() -> &'static serde_json::Value {
     static CATALOG: OnceLock<serde_json::Value> = OnceLock::new();
@@ -100,6 +102,13 @@ pub fn capture(input_name: &str, output_name: &str) -> Result<Snapshot, String> 
     let standard_timeout = Duration::from_secs(3);
     let first = decode_grid(&query(grid_query(), 1, standard_timeout)?)?;
     let scene = read_scene(&query(frame(0x0c, &[127])?, 0x0c, standard_timeout)?)?;
+    let mut scene_names = Vec::with_capacity(8);
+    for index in 0..8 {
+        scene_names.push(read_scene_name(
+            &query(frame(0x0e, &[index])?, 0x0e, standard_timeout)?,
+            index,
+        )?);
+    }
     let status_before = query(frame(0x13, &[])?, 0x13, standard_timeout)?;
     let (_, status) = unframe(&status_before)?;
     if !status.len().is_multiple_of(3) {
@@ -210,6 +219,7 @@ pub fn capture(input_name: &str, output_name: &str) -> Result<Snapshot, String> 
         return Err("Device context changed during capture; retry".into());
     }
     let mut snapshot = snapshot(second, scene)?;
+    snapshot.scene_names = scene_names;
     for block in &mut snapshot.blocks {
         if let Some(effect) = block.instance_id {
             if let Some((channel, bypassed)) = status_state.get(&effect) {
@@ -237,6 +247,80 @@ fn read_scene(bytes: &[u8]) -> Result<u8, String> {
         return Err("Invalid scene reply".into());
     }
     Ok(p[0])
+}
+fn read_scene_name(bytes: &[u8], expected: u8) -> Result<String, String> {
+    let (op, payload) = unframe(bytes)?;
+    if op != 0x0e || payload.len() < 2 || payload[0] != expected {
+        return Err("Invalid scene-name reply".into());
+    }
+    let name = payload[1..].split(|b| *b == 0).next().unwrap_or_default();
+    Ok(String::from_utf8_lossy(name).trim_end().to_owned())
+}
+
+/// Select one of the eight documented scenes and require a matching readback.
+/// This function is deliberately separate from parameter-write capability.
+pub fn select_scene(input_name: &str, output_name: &str, scene: u8) -> Result<(), String> {
+    if scene > 7 {
+        return Err("Scene must be 1–8".into());
+    }
+    let mut input = MidiInput::new("Axe Studio scene selection").map_err(|e| e.to_string())?;
+    input.ignore(Ignore::None);
+    let output = MidiOutput::new("Axe Studio scene selection").map_err(|e| e.to_string())?;
+    let ins = input
+        .ports()
+        .into_iter()
+        .filter(|p| input.port_name(p).ok().as_deref() == Some(input_name))
+        .collect::<Vec<_>>();
+    let outs = output
+        .ports()
+        .into_iter()
+        .filter(|p| output.port_name(p).ok().as_deref() == Some(output_name))
+        .collect::<Vec<_>>();
+    if ins.len() != 1 || outs.len() != 1 {
+        return Err("Select unique MIDI input/output endpoints".into());
+    }
+    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(64);
+    let _connection = input
+        .connect(
+            &ins[0],
+            "Axe Studio scene selection",
+            move |_, bytes, _| {
+                if bytes.len() <= 4096 {
+                    let _ = tx.try_send(bytes.to_vec());
+                }
+            },
+            (),
+        )
+        .map_err(|e| e.to_string())?;
+    let mut output = output
+        .connect(&outs[0], "Axe Studio scene selection")
+        .map_err(|e| e.to_string())?;
+    while rx.try_recv().is_ok() {}
+    output
+        .send(&frame(0x0c, &[scene])?)
+        .map_err(|e| e.to_string())?;
+    let end = Instant::now() + Duration::from_millis(100);
+    while let Some(remaining) = end.checked_duration_since(Instant::now()) {
+        match rx.recv_timeout(remaining) {
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+    output
+        .send(&frame(0x0c, &[127])?)
+        .map_err(|e| e.to_string())?;
+    let end = Instant::now() + Duration::from_secs(3);
+    while let Some(remaining) = end.checked_duration_since(Instant::now()) {
+        let bytes = rx
+            .recv_timeout(remaining)
+            .map_err(|_| "Scene selection readback timed out".to_string())?;
+        if let Ok((0x0c, payload)) = unframe(&bytes)
+            && payload == [scene]
+        {
+            return Ok(());
+        }
+    }
+    Err("Scene selection was not confirmed".into())
 }
 fn snapshot(grid: Grid, scene: u8) -> Result<Snapshot, String> {
     let mut used = BTreeSet::new();
@@ -297,6 +381,7 @@ fn snapshot(grid: Grid, scene: u8) -> Result<Snapshot, String> {
             target: Target::Hardware,
         },
         name: grid.name,
+        scene_names: Vec::new(),
         blocks,
         edges,
     })
@@ -412,5 +497,13 @@ mod tests {
     #[test]
     fn scene_query_echo_rejected() {
         assert!(read_scene(&frame(0x0c, &[127]).unwrap()).is_err());
+    }
+    #[test]
+    fn scene_name_reply_must_match_requested_index() {
+        let mut payload = vec![2];
+        payload.extend_from_slice(b"Lead\0");
+        let reply = frame(0x0e, &payload).unwrap();
+        assert_eq!(read_scene_name(&reply, 2).unwrap(), "Lead");
+        assert!(read_scene_name(&reply, 1).is_err());
     }
 }

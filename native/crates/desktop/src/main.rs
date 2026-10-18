@@ -45,6 +45,8 @@ enum Message {
     Agent(u64, axe_agents::runtime::AgentEvent),
     Runtime(u64, u64, bool, Result<integration::RuntimeView, String>),
     SelectBlock(String),
+    SelectScene(u8),
+    SceneResult(u64, Result<Snapshot, String>),
     MoveBlock(String, (f32, f32)),
     UnsupportedRouting,
     Adjust(String, String, f64),
@@ -54,6 +56,7 @@ enum Message {
     SaveDialog,
     Destination(String),
     ConfirmSave,
+    SaveResult(u64, Result<axe_runtime::SaveOutcome, String>),
     DeviceResult(Result<(), String>),
     CancelDialog,
     LeaveUnsaved,
@@ -346,6 +349,9 @@ impl Studio {
                 }
             }
             Message::Retry => {
+                if self.device_busy || self.agent_busy {
+                    return iced::Task::none();
+                }
                 if self.dirty || self.recovery {
                     self.pending = Some(Pending::Capture);
                     return iced::Task::none();
@@ -401,8 +407,16 @@ impl Studio {
                     Err(e) => self.status = format!("USB discovery failed: {e}"),
                 }
             }
-            Message::Input(name) => self.input = Some(name),
-            Message::Output(name) => self.output = Some(name),
+            Message::Input(name) => {
+                if !self.busy && !self.device_busy && !self.agent_busy {
+                    self.input = Some(name);
+                }
+            }
+            Message::Output(name) => {
+                if !self.busy && !self.device_busy && !self.agent_busy {
+                    self.output = Some(name);
+                }
+            }
             Message::Capture => {
                 if self.backend.is_none() {
                     self.status =
@@ -462,6 +476,87 @@ impl Studio {
                     }
                     Err(e) => {
                         self.status = format!("USB read failed: {e}. Retry or select endpoints.")
+                    }
+                }
+            }
+            Message::SelectScene(scene) => {
+                if scene > 7 || self.device_busy || self.agent_busy {
+                    return iced::Task::none();
+                }
+                if self.dirty || self.recovery {
+                    self.status =
+                        "Restore or save the current edits before changing scenes.".into();
+                    return iced::Task::none();
+                }
+                let Some(current) = self.snapshot.clone() else {
+                    self.status =
+                        "Scene selection requires a connected device or Test mock.".into();
+                    return iced::Task::none();
+                };
+                self.device_busy = true;
+                let epoch = self.epoch;
+                if current.context.target == axe_domain::Target::TestMock {
+                    let Some(backend) = self.backend.clone() else {
+                        return iced::Task::none();
+                    };
+                    return iced::Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                backend
+                                    .lock()
+                                    .map_err(|_| "Backend unavailable")?
+                                    .select_scene(scene)
+                            })
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| r)
+                        },
+                        move |result| Message::SceneResult(epoch, result),
+                    );
+                }
+                let (Some(input), Some(output)) = (self.input.clone(), self.output.clone()) else {
+                    self.status = "Select both MIDI endpoints before changing the scene.".into();
+                    self.device_busy = false;
+                    return iced::Task::none();
+                };
+                self.disconnect_agent();
+                return iced::Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            axe_session::usb::select_scene(&input, &output, scene)?;
+                            axe_session::usb::capture(&input, &output)
+                        })
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r)
+                    },
+                    move |result| Message::SceneResult(epoch, result),
+                );
+            }
+            Message::SceneResult(epoch, result) => {
+                if epoch != self.epoch {
+                    return iced::Task::none();
+                }
+                self.device_busy = false;
+                match result {
+                    Ok(snapshot) => {
+                        self.snapshot = Some(snapshot.clone());
+                        self.status = format!(
+                            "{} selected; scene and block state re-read.",
+                            snapshot
+                                .scene_names
+                                .get(snapshot.context.scene.unwrap_or(0) as usize)
+                                .map(String::as_str)
+                                .unwrap_or("Scene")
+                        );
+                        return self.bind_runtime();
+                    }
+                    Err(error) => {
+                        // The scene command may have reached the device even if its
+                        // confirmation was lost; never keep presenting the old state.
+                        self.snapshot = None;
+                        self.disconnect_agent();
+                        self.status = format!("Scene selection was not confirmed: {error}")
                     }
                 }
             }
