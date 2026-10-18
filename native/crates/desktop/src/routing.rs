@@ -408,11 +408,7 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
                 Point::new(p.x + width / 2., p.y + height * 0.29),
                 material.accent,
             );
-            let label = if let Some(id) = b.label.strip_prefix("Effect ID ") {
-                format!("ID {id}")
-            } else {
-                b.label.clone()
-            };
+            let label = b.label.clone();
             let chars = ((width - 8.) / 5.5).floor().max(3.) as usize;
             f.fill_text(canvas::Text {
                 content: if label.chars().count() > chars {

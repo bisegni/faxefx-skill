@@ -483,12 +483,39 @@ impl Default for Mock {
                 label: id.into(),
                 unit: "mock units".into(),
                 confirmed: Some(5.),
+                display_text: None,
                 range: Some((0., 10.)),
                 writable: true,
                 automated: Some(false),
                 raw_bits: None,
             })
             .collect();
+        let mut params: Vec<Parameter> = params;
+        params.insert(
+            0,
+            Parameter {
+                id: "model".into(),
+                label: "Model".into(),
+                unit: "mock text".into(),
+                confirmed: None,
+                display_text: Some("Test model".into()),
+                range: None,
+                writable: false,
+                automated: None,
+                raw_bits: None,
+            },
+        );
+        params.push(Parameter {
+            id: "level".into(),
+            label: "Level".into(),
+            unit: "mock text".into(),
+            confirmed: None,
+            display_text: Some("0 dB".into()),
+            range: None,
+            writable: false,
+            automated: None,
+            raw_bits: None,
+        });
         Self {
             state: Snapshot {
                 context: Context {
@@ -510,6 +537,8 @@ impl Default for Mock {
                     Block {
                         id: "input1".into(),
                         family: "input".into(),
+                        type_name: Some("Input 1".into()),
+                        instance_id: None,
                         label: "Input".into(),
                         position: (0, 0),
                         parameters: vec![],
@@ -517,6 +546,8 @@ impl Default for Mock {
                     Block {
                         id: "amp1".into(),
                         family: "amp".into(),
+                        type_name: Some("Amplifier".into()),
+                        instance_id: Some(58),
                         label: "Test amplifier".into(),
                         position: (2, 0),
                         parameters: params,
@@ -524,6 +555,8 @@ impl Default for Mock {
                     Block {
                         id: "output1".into(),
                         family: "output".into(),
+                        type_name: Some("Output 1".into()),
+                        instance_id: None,
                         label: "Output".into(),
                         position: (4, 0),
                         parameters: vec![],

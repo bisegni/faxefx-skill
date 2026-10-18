@@ -30,6 +30,9 @@ pub struct Parameter {
     pub label: String,
     pub unit: String,
     pub confirmed: Option<f64>,
+    /// Device-provided textual value for parameters such as amp model names.
+    #[serde(default)]
+    pub display_text: Option<String>,
     pub range: Option<(f64, f64)>,
     pub writable: bool,
     pub automated: Option<bool>,
@@ -61,6 +64,12 @@ impl Parameter {
 pub struct Block {
     pub id: String,
     pub family: String,
+    /// Human-readable effect family when the device instance ID is recognized.
+    #[serde(default)]
+    pub type_name: Option<String>,
+    /// Axe-Fx grid instance identifier. This is not a model identifier.
+    #[serde(default)]
+    pub instance_id: Option<u16>,
     pub label: String,
     pub position: (u8, u8),
     pub parameters: Vec<Parameter>,
@@ -111,6 +120,7 @@ mod tests {
             label: "Gain".into(),
             unit: "".into(),
             confirmed: None,
+            display_text: None,
             range: Some((0., 10.)),
             writable: true,
             automated: Some(false),

@@ -141,18 +141,47 @@ impl Studio {
                         )
                         .push(
                             row![
-                                label("Model"),
+                                label("Type"),
                                 space::horizontal(),
-                                badge("Unknown", style::MUTED)
+                                badge(
+                                    b.type_name.as_deref().unwrap_or("Unknown type"),
+                                    if b.type_name.is_some() {
+                                        family.accent
+                                    } else {
+                                        style::MUTED
+                                    }
+                                )
+                            ]
+                            .align_y(iced::Center),
+                        )
+                        .push(
+                            row![
+                                label("Instance"),
+                                space::horizontal(),
+                                badge(
+                                    b.instance_id
+                                        .map(|id| format!("{} · {id}", b.id))
+                                        .unwrap_or_else(|| b.id.clone()),
+                                    style::MUTED
+                                )
                             ]
                             .align_y(iced::Center),
                         )
                         .push(iced::widget::rule::horizontal(1))
-                        .push(label("Observed parameters"));
+                        .push(label(if b.parameters.is_empty() {
+                            "Live parameters · unavailable"
+                        } else {
+                            "Live parameters · device readback"
+                        }));
                     for p in &b.parameters {
                         body = body.push(
                             row![
-                                text(&p.label).size(13).width(Length::Fill),
+                                column![
+                                    text(&p.label).size(13),
+                                    text(&p.unit).size(10).color(style::MUTED)
+                                ]
+                                .spacing(2)
+                                .width(Length::Fill),
                                 iced::widget::canvas(crate::knob::Knob {
                                     value: p.confirmed,
                                     range: p.range
@@ -163,7 +192,8 @@ impl Studio {
                                     text(
                                         p.confirmed
                                             .map(|v| format!("{v:.1}"))
-                                            .unwrap_or("—".into())
+                                            .or_else(|| p.display_text.clone())
+                                            .unwrap_or("Not read".into())
                                     )
                                     .size(12)
                                 )
@@ -208,8 +238,11 @@ impl Studio {
                         }
                     }
                     if b.parameters.is_empty() {
-                        body =
-                            body.push(label("Parameter values are not available for this block."));
+                        body = body.push(label(if b.type_name.is_some() {
+                            "No live parameter list is verified for this block type yet."
+                        } else {
+                            "The device block type is unknown; parameters are not guessed."
+                        }));
                     }
                     body = body.push(iced::widget::rule::horizontal(1)).push(label(
                         if self

@@ -108,7 +108,7 @@ pub fn decode_grid(bytes: &[u8]) -> Result<Grid, String> {
 
 /// Fixed active-channel getter; this API cannot construct a setter packet.
 pub fn amp_getter(effect: u16, parameter: u16) -> Result<Vec<u8>, String> {
-    if !(58..=61).contains(&effect) || ![1, 2, 3, 4, 5, 20].contains(&parameter) {
+    if !(58..=61).contains(&effect) || ![0, 1, 2, 3, 4, 5, 20, 21].contains(&parameter) {
         return Err("Unsupported amp getter".into());
     }
     let mut p = vec![0; 15];
@@ -120,6 +120,16 @@ pub fn amp_getter(effect: u16, parameter: u16) -> Result<Vec<u8>, String> {
     frame(1, &p)
 }
 pub fn amp_value(bytes: &[u8], effect: u16, parameter: u16) -> Result<(u32, f64), String> {
+    let (bits, value, _) = amp_readback(bytes, effect, parameter)?;
+    value
+        .map(|value| (bits, value))
+        .ok_or_else(|| "Amp parameter is text-valued".into())
+}
+pub fn amp_readback(
+    bytes: &[u8],
+    effect: u16,
+    parameter: u16,
+) -> Result<(u32, Option<f64>, String), String> {
     let (op, p) = unframe(bytes)?;
     let request = amp_getter(effect, parameter)?;
     let (_, expected) = unframe(&request)?;
@@ -133,19 +143,25 @@ pub fn amp_value(bytes: &[u8], effect: u16, parameter: u16) -> Result<(u32, f64)
     let raw = f32::from_bits(bits) as f64;
     let length = p[13] as usize + ((p[14] as usize) << 7);
     let data = unpack(&p[15..], length)?;
-    let display = String::from_utf8_lossy(data.split(|b| *b == 0).next().unwrap_or_default());
-    let value = display
+    let display = String::from_utf8_lossy(data.split(|b| *b == 0).next().unwrap_or_default())
         .trim()
-        .parse::<f64>()
-        .map_err(|_| "Amp display conversion unavailable")?;
-    if !raw.is_finite()
-        || !(0.0..=1.0).contains(&raw)
-        || !value.is_finite()
-        || (value - raw * 10.).abs() >= 0.02
-    {
-        return Err("Amp raw/display conversion does not match the verified profile".into());
+        .to_string();
+    if !raw.is_finite() || display.is_empty() {
+        return Err("Amp getter returned an invalid value".into());
     }
-    Ok((bits, raw * 10.))
+    if [1, 2, 3, 4, 5, 20].contains(&parameter) {
+        let value = display
+            .parse::<f64>()
+            .map_err(|_| "Amp display conversion unavailable")?;
+        if !(0.0..=1.0).contains(&raw) || !value.is_finite() || (value - raw * 10.).abs() >= 0.02 {
+            return Err("Amp raw/display conversion does not match the verified profile".into());
+        }
+        Ok((bits, Some(raw * 10.), display))
+    } else if [0, 21].contains(&parameter) {
+        Ok((bits, None, display))
+    } else {
+        Err("Unsupported amp getter parameter".into())
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -168,5 +184,46 @@ mod tests {
     fn seven_bit_unpack() {
         assert_eq!(unpack(&[127, 64], 1).unwrap(), vec![255]);
         assert!(unpack(&[127, 65], 1).is_err());
+    }
+    #[test]
+    fn amp_read_catalog_is_explicitly_allowlisted() {
+        assert!(amp_getter(58, 0).is_ok());
+        assert!(amp_getter(58, 21).is_ok());
+        assert!(amp_getter(58, 22).is_err());
+        assert!(amp_getter(62, 1).is_err());
+    }
+    #[test]
+    fn text_valued_amp_getters_keep_device_text() {
+        fn pack(bytes: &[u8]) -> Vec<u8> {
+            let mut output = vec![];
+            let (mut acc, mut bits) = (0_u16, 0);
+            for byte in bytes {
+                acc = (acc << 8) | *byte as u16;
+                bits += 8;
+                while bits >= 7 {
+                    bits -= 7;
+                    output.push(((acc >> bits) & 127) as u8);
+                    acc &= (1 << bits) - 1;
+                }
+            }
+            if bits > 0 {
+                output.push(((acc << (7 - bits)) & 127) as u8);
+            }
+            output
+        }
+        fn reply(parameter: u8, display: &str) -> Vec<u8> {
+            let text = display.as_bytes();
+            let mut payload = vec![0x1a, 0, 58, 0, parameter, 0];
+            payload.extend([0; 5]);
+            payload.extend([0, 0, text.len() as u8, 0]);
+            payload.extend(pack(text));
+            frame(1, &payload).unwrap()
+        }
+        let (_, model, name) = amp_readback(&reply(0, "USA Clean"), 58, 0).unwrap();
+        assert_eq!(model, None);
+        assert_eq!(name, "USA Clean");
+        let (_, level, value) = amp_readback(&reply(21, "-3.0 dB"), 58, 21).unwrap();
+        assert_eq!(level, None);
+        assert_eq!(value, "-3.0 dB");
     }
 }

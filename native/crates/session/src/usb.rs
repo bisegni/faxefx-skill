@@ -100,25 +100,38 @@ pub fn capture(input_name: &str, output_name: &str) -> Result<Snapshot, String> 
             }
             let mut parameters = vec![];
             for (id, name) in [
+                (0, "model"),
                 (1, "gain"),
                 (2, "bass"),
                 (3, "mid"),
                 (4, "treble"),
                 (5, "master"),
                 (20, "presence"),
+                (21, "level"),
             ] {
                 let value = query(crate::protocol::amp_getter(effect, id)?, 1)
-                    .and_then(|reply| crate::protocol::amp_value(&reply, effect, id))
+                    .and_then(|reply| crate::protocol::amp_readback(&reply, effect, id))
                     .ok();
                 parameters.push(Parameter {
                     id: name.into(),
-                    label: name.into(),
-                    unit: "knob".into(),
-                    confirmed: value.map(|(_, v)| v),
-                    range: value.map(|_| (0., 10.)),
+                    label: match name {
+                        "model" => "Model".into(),
+                        "level" => "Level".into(),
+                        _ => name.chars().next().unwrap().to_uppercase().to_string() + &name[1..],
+                    },
+                    unit: if [1, 2, 3, 4, 5, 20].contains(&id) {
+                        "knob".into()
+                    } else {
+                        "device text".into()
+                    },
+                    confirmed: value.as_ref().and_then(|(_, value, _)| *value),
+                    display_text: value.as_ref().map(|(_, _, text)| text.clone()),
+                    range: value
+                        .as_ref()
+                        .and_then(|(_, numeric, _)| numeric.map(|_| (0., 10.))),
                     writable: false,
                     automated: None,
-                    raw_bits: value.map(|(bits, _)| bits),
+                    raw_bits: value.map(|(bits, _, _)| bits),
                 });
             }
             amps.insert(effect, (channel, parameters));
@@ -188,21 +201,12 @@ fn snapshot(grid: Grid, scene: u8) -> Result<Snapshot, String> {
     let mut edges = vec![];
     for c in &grid.cells {
         if let Some(id) = ids.get(&(c.column, c.row)) {
-            let family = if c.instance == 0 {
-                "wire"
-            } else if (1024..1088).contains(&c.instance) {
-                "shunt"
-            } else {
-                "unknown"
-            };
-            let label = if family == "unknown" {
-                format!("Effect ID {}", c.instance)
-            } else {
-                family.to_string()
-            };
+            let (family, type_name, label) = block_identity(c.instance);
             blocks.push(Block {
                 id: id.clone(),
                 family: family.into(),
+                type_name,
+                instance_id: (c.instance != 0).then_some(c.instance),
                 label,
                 position: (c.column - 1, c.row - 1),
                 parameters: vec![],
@@ -233,6 +237,35 @@ fn snapshot(grid: Grid, scene: u8) -> Result<Snapshot, String> {
         edges,
     })
 }
+
+/// Map only the instance IDs present in the application's authored identity
+/// catalog. Unrecognized IDs remain explicitly unknown; this does not infer a
+/// model or parameter schema.
+fn block_identity(instance: u16) -> (&'static str, Option<String>, String) {
+    let (family, name, short_name, ordinal) = match instance {
+        0 => return ("wire", Some("Connection".into()), "WIRE".into()),
+        1024..=1087 => return ("shunt", Some("Shunt".into()), "SHUNT".into()),
+        46..=49 => ("compressor", "Compressor", "COMP", Some(instance - 45)),
+        58..=61 => ("amp", "Amplifier", "AMP", Some(instance - 57)),
+        62..=65 => ("cab", "Cabinet", "CAB", Some(instance - 61)),
+        66..=69 => ("reverb", "Reverb", "REV", Some(instance - 65)),
+        70..=73 => ("delay", "Delay", "DELAY", Some(instance - 69)),
+        78..=81 => ("chorus", "Chorus", "CHORUS", Some(instance - 77)),
+        118..=121 => ("drive", "Drive", "DRIVE", Some(instance - 117)),
+        37..=40 => ("input", "Input", "IN", Some(instance - 36)),
+        41 => ("input", "USB Input", "USB IN", None),
+        42..=45 => ("output", "Output", "OUT", Some(instance - 41)),
+        206..=209 => ("nam-player", "NAM Player", "NAM", Some(instance - 205)),
+        _ => return ("unknown", None, format!("ID {instance}")),
+    };
+    let display = ordinal
+        .map(|n| format!("{short_name} {n}"))
+        .unwrap_or_else(|| short_name.to_string());
+    let type_name = ordinal
+        .map(|_| name.to_string())
+        .unwrap_or_else(|| name.to_string());
+    (family, Some(type_name), display)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,9 +291,29 @@ mod tests {
         };
         let s = snapshot(grid, 0).unwrap();
         assert_eq!(s.blocks[0].family, "unknown");
+        assert_eq!(s.blocks[0].type_name, None);
+        assert_eq!(s.blocks[0].label, "ID 987");
         assert!(s.blocks[0].parameters.is_empty());
         assert_eq!(s.edges.len(), 1);
         assert_eq!(s.context.channel, None);
+    }
+    #[test]
+    fn recognized_instance_ids_get_clear_block_names_and_types() {
+        let grid = Grid {
+            slot: 3,
+            name: "Authored".into(),
+            cells: vec![crate::protocol::Cell {
+                row: 1,
+                column: 1,
+                instance: 58,
+                inputs: 0,
+            }],
+        };
+        let block = snapshot(grid, 0).unwrap().blocks.remove(0);
+        assert_eq!(block.family, "amp");
+        assert_eq!(block.type_name.as_deref(), Some("Amplifier"));
+        assert_eq!(block.instance_id, Some(58));
+        assert_eq!(block.label, "AMP 1");
     }
     #[test]
     fn scene_query_echo_rejected() {
