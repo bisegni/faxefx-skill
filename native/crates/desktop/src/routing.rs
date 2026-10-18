@@ -60,17 +60,19 @@ pub fn auto_layout(snapshot: &Snapshot, size: Size) -> BTreeMap<String, (f32, f3
         return BTreeMap::new();
     }
     let aspect = (size.width.max(1.) / size.height.max(1.)).clamp(0.5, 2.0);
-    let columns = ((count as f32 * aspect).sqrt().round() as usize).clamp(1, count);
     let width = 90.0_f32.min(((size.width - 36.).max(54.) / 3.).max(62.));
     let height = 88.0_f32;
+    let capacity_rows = ((size.height - 24.).max(height) / (height + 12.))
+        .floor()
+        .max(1.) as usize;
+    let required_columns = count.div_ceil(capacity_rows);
+    let visual_columns = (count as f32 * aspect).sqrt().round() as usize;
+    let columns = required_columns.max(visual_columns).clamp(1, count);
     let mut ordered = snapshot.blocks.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|b| (b.position.0, b.position.1, b.id.as_str()));
-    let min_col = ordered.first().map(|b| b.position.0).unwrap_or(0);
-    let max_col = ordered.last().map(|b| b.position.0).unwrap_or(min_col);
-    let span = usize::from(max_col.saturating_sub(min_col)).max(1);
     let mut buckets = vec![Vec::new(); columns];
-    for block in ordered {
-        let rank = usize::from(block.position.0.saturating_sub(min_col)) * (columns - 1) / span;
+    for (index, block) in ordered.into_iter().enumerate() {
+        let rank = index * columns / count;
         buckets[rank].push(block);
     }
     let usable_w = (size.width - width - 24.).max(0.);
@@ -91,7 +93,11 @@ pub fn auto_layout(snapshot: &Snapshot, size: Size) -> BTreeMap<String, (f32, f3
             12. + col as f32 * usable_w / (used_columns - 1) as f32
         };
         for (row, block) in blocks.iter().enumerate() {
-            let y = 12. + (row + 1) as f32 * usable_h / (blocks.len() + 1) as f32;
+            let y = if blocks.len() <= 1 {
+                12. + usable_h / 2.
+            } else {
+                12. + row as f32 * usable_h / (blocks.len() - 1) as f32
+            };
             result.insert(block.id.clone(), (x, y));
         }
     }
