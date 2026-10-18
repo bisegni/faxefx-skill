@@ -25,6 +25,7 @@ pub struct Backend {
     session: Option<Session<Mock>>,
     hardware_endpoints: Option<(String, String)>,
     attached: BTreeSet<String>,
+    midi: Option<axe_session::usb::live::MidiService>,
 }
 impl Backend {
     pub fn open(root: PathBuf) -> Result<Shared, String> {
@@ -49,9 +50,17 @@ impl Backend {
             session: None,
             hardware_endpoints: None,
             attached: BTreeSet::new(),
+            midi: None,
         })))
     }
     pub fn bind(&mut self, snapshot: Snapshot) -> Result<(), String> {
+        if self
+            .midi
+            .as_ref()
+            .is_some_and(|m| m.live.snapshot.context.session != snapshot.context.session)
+        {
+            self.midi = None;
+        }
         self.hardware_endpoints = None;
         self.store
             .set_setting("last_namespace", snapshot.context.target.namespace())
@@ -159,14 +168,45 @@ impl Backend {
             session.save_mock(slot).map_err(err)?;
             return Ok(SaveOutcome::MockVerified);
         }
-        let (input, output) = self
-            .hardware_endpoints
-            .clone()
-            .ok_or("Read USB with selected endpoints before saving")?;
-        self.hardware_save(slot, |snapshot, before| {
-            axe_session::usb::store_preset(&input, &output, snapshot, slot, before)
-        })
+        let mut midi = self.midi.take().ok_or("Reconnect MIDI before saving")?;
+        let result = self.hardware_save(slot, |snapshot, before| midi.save(snapshot, slot, before));
+        self.midi = Some(midi);
+        result
     }
+    pub fn capture_hardware(&mut self, input: String, output: String) -> Result<Snapshot, String> {
+        self.midi = None;
+        self.snapshot = None;
+        self.hardware_endpoints = None;
+        let midi = axe_session::usb::live::MidiService::connect(&input, &output)?;
+        let snapshot = midi.live.snapshot.clone();
+        self.midi = Some(midi);
+        self.bind_hardware(snapshot.clone(), input, output)?;
+        Ok(snapshot)
+    }
+    pub fn synchronize(
+        &mut self,
+        session: &str,
+        selected: Option<String>,
+        visible: Vec<String>,
+    ) -> Result<Snapshot, String> {
+        let midi = self.midi.as_mut().ok_or("Live MIDI unavailable")?;
+        if midi.live.snapshot.context.session != session {
+            return Ok(midi.live.snapshot.clone());
+        }
+        let result = midi.step(selected, visible);
+        self.snapshot = Some(midi.live.snapshot.clone());
+        // Failed reads invalidate values in both agent inspection and the UI.
+        if let Err(error) = result {
+            self.store
+                .event(
+                    "hardware",
+                    &json!({"kind":"live_read_failed","error":error}).to_string(),
+                )
+                .map_err(err)?;
+        }
+        Ok(midi.live.snapshot.clone())
+    }
+
     fn hardware_save(
         &self,
         slot: u16,
@@ -208,6 +248,11 @@ impl Backend {
         Ok(SaveOutcome::HardwareSentUnverified { destination: slot })
     }
     pub fn select_scene(&mut self, scene: u8) -> Result<Snapshot, String> {
+        if let Some(midi) = self.midi.as_mut() {
+            let result = midi.scene(scene);
+            self.snapshot = result.as_ref().ok().cloned();
+            return result;
+        }
         let s = self.session.as_mut().ok_or("Scene selection unavailable")?;
         let context = s.confirmed.context.clone();
         let snapshot = s.select_scene(&context, scene).map_err(err)?;
@@ -260,7 +305,7 @@ impl Backend {
         }
         match call.name.as_str() {
             "session_inspect" => Ok(
-                json!({"snapshot":self.snapshot,"capabilities":self.capabilities(),"parameter_catalog":axe_session::usb::catalog_info(),"attached_analysis":self.attached}),
+                json!({"snapshot":self.snapshot,"capabilities":self.capabilities(),"parameter_catalog":axe_session::usb::catalog_info(),"live_freshness":self.midi.as_ref().map(|m| &m.live.freshness),"attached_analysis":self.attached}),
             ),
             "block_inspect" => {
                 let id = call.arguments["block"]
@@ -269,7 +314,12 @@ impl Backend {
                 self.snapshot
                     .as_ref()
                     .and_then(|s| s.blocks.iter().find(|b| b.id == id))
-                    .map(|b| json!(b))
+                    .map(|b| {
+                        let mut value = json!(b);
+                        value["live_freshness"] =
+                            json!(self.midi.as_ref().map(|m| &m.live.freshness));
+                        value
+                    })
                     .ok_or("Unknown block".into())
             }
             "analysis_attached" => {

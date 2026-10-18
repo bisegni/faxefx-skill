@@ -201,42 +201,69 @@ impl Studio {
                         }));
                     for p in &b.parameters {
                         body = body.push(
-                            row![
-                                column![
-                                    text(&p.label).size(13),
-                                    text(&p.unit).size(10).color(style::MUTED)
-                                ]
-                                .spacing(2)
-                                .width(Length::Fill),
-                                iced::widget::canvas(crate::knob::Knob {
-                                    value: p.confirmed,
-                                    range: p.range
-                                })
-                                .width(34)
-                                .height(34),
-                                container(
-                                    text(
-                                        p.confirmed
-                                            .map(|v| format!("{v:.1}"))
-                                            .or_else(|| p.display_text.clone())
-                                            .or_else(|| {
-                                                p.raw_numeric.map(|v| format!("Raw {v:.5}"))
-                                            })
-                                            .unwrap_or_else(|| {
-                                                if p.read_error.is_some() {
-                                                    "Read failed".into()
-                                                } else {
-                                                    "Unavailable".into()
-                                                }
-                                            })
+                            iced::widget::Sensor::new(
+                                row![
+                                    column![
+                                        text(&p.label).size(13),
+                                        text(&p.unit).size(10).color(style::MUTED)
+                                    ]
+                                    .spacing(2)
+                                    .width(Length::Fill),
+                                    iced::widget::canvas(crate::knob::Knob {
+                                        value: p.confirmed,
+                                        range: p.range
+                                    })
+                                    .width(34)
+                                    .height(34),
+                                    container(
+                                        text(
+                                            p.display_text
+                                                .clone()
+                                                .or_else(|| p.confirmed.map(|v| format!("{v:.1}")))
+                                                .or_else(|| {
+                                                    p.raw_numeric.map(|v| format!("Raw {v:.5}"))
+                                                })
+                                                .unwrap_or_else(|| {
+                                                    if p.read_error.is_some() {
+                                                        "Read failed".into()
+                                                    } else {
+                                                        "Unavailable".into()
+                                                    }
+                                                })
+                                        )
+                                        .size(12)
                                     )
-                                    .size(12)
-                                )
-                                .padding([5, 8])
-                                .style(style::inset)
-                            ]
-                            .spacing(10)
-                            .align_y(iced::Center),
+                                    .padding([5, 8])
+                                    .style(style::inset)
+                                ]
+                                .spacing(10)
+                                .align_y(iced::Center),
+                            )
+                            .key((
+                                self.snapshot.as_ref().unwrap().context.session.clone(),
+                                b.id.clone(),
+                                p.id.clone(),
+                            ))
+                            .on_show({
+                                let session =
+                                    self.snapshot.as_ref().unwrap().context.session.clone();
+                                let block = b.id.clone();
+                                let parameter = p.id.clone();
+                                move |_| {
+                                    Message::InspectorVisibility(
+                                        session.clone(),
+                                        block.clone(),
+                                        parameter.clone(),
+                                        true,
+                                    )
+                                }
+                            })
+                            .on_hide(Message::InspectorVisibility(
+                                self.snapshot.as_ref().unwrap().context.session.clone(),
+                                b.id.clone(),
+                                p.id.clone(),
+                                false,
+                            )),
                         );
                         body = body.push(
                             text(format!(
@@ -302,7 +329,7 @@ impl Studio {
                         {
                             "●  Simulated values · live controls"
                         } else {
-                            "●  Device capture · manual Save"
+                            "●  Live device reads · manual Save"
                         },
                     ));
                 } else {
@@ -344,25 +371,17 @@ impl Studio {
                 ]
                 .spacing(6);
                 if let Some(s) = &self.snapshot {
-                    body = body
-                        .push(
-                            iced::widget::canvas(routing::RoutingCanvas {
-                                snapshot: s,
-                                simple: self.simple_cables,
-                                selected: self.selected_block.as_deref(),
-                                positions: &self.block_positions,
-                                viewport: self.routing_viewport.clone(),
-                            })
-                            .width(Length::Fill)
-                            .height(Length::Fill),
-                        )
-                        .push(label(
-                            s.edges
-                                .iter()
-                                .map(|(a, b)| format!("{a} → {b}"))
-                                .collect::<Vec<_>>()
-                                .join("    "),
-                        ));
+                    body = body.push(
+                        iced::widget::canvas(routing::RoutingCanvas {
+                            snapshot: s,
+                            simple: self.simple_cables,
+                            selected: self.selected_block.as_deref(),
+                            positions: &self.block_positions,
+                            viewport: self.routing_viewport.clone(),
+                        })
+                        .width(Length::Fill)
+                        .height(Length::Fill),
+                    );
                 } else {
                     body = body.push(
                         container(

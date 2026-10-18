@@ -118,6 +118,36 @@ pub fn decode_grid(bytes: &[u8]) -> Result<Grid, String> {
     })
 }
 
+/// Opaque per-block revision returned by editor operation 0x0084.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockToken(pub u32);
+pub fn block_token_getter(effect: u16) -> Result<Vec<u8>, String> {
+    let packet = parameter_getter(effect, 0)?;
+    let (_, payload) = unframe(&packet)?;
+    let mut payload = payload.to_vec();
+    payload[..2].copy_from_slice(&[4, 1]);
+    frame(1, &payload)
+}
+pub fn block_token_readback(bytes: &[u8], effect: u16) -> Result<BlockToken, String> {
+    let (op, p) = unframe(bytes)?;
+    let request = block_token_getter(effect)?;
+    let (_, expected) = unframe(&request)?;
+    if op != 1
+        || p.len() != 15
+        || p[..6] != expected[..6]
+        || p[10] > 15
+        || p[11..15] != [0, 0, 0, 0]
+    {
+        return Err("Block token reply mismatch".into());
+    }
+    Ok(BlockToken(
+        p[6..11]
+            .iter()
+            .enumerate()
+            .fold(0, |a, (i, b)| a | ((*b as u32) << (7 * i))),
+    ))
+}
+
 /// Fixed active-channel getter; this API cannot construct a setter packet.
 pub fn amp_getter(effect: u16, parameter: u16) -> Result<Vec<u8>, String> {
     if !(58..=61).contains(&effect) || ![0, 1, 2, 3, 4, 5, 20, 21].contains(&parameter) {

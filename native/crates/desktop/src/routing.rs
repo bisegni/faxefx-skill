@@ -38,8 +38,8 @@ impl RoutingCanvas<'_> {
     fn geometry(&self, bounds: Rectangle) -> (f32, f32, impl Fn(&Block) -> Point + use<'_>) {
         let cell_w = (bounds.width - 24.).max(14.) / 14.;
         let cell_h = (bounds.height - 24.).max(14.) / 6.;
-        let width = (cell_w - 6.).clamp(36., 82.);
-        let height = (cell_h - 8.).clamp(40., 58.);
+        let width = (cell_w - 20.).clamp(36., 64.);
+        let height = (cell_h - 16.).clamp(38., 46.);
         let automatic = auto_layout(self.snapshot, bounds.size());
         (width, height, move |block: &Block| {
             let p = self
@@ -60,8 +60,8 @@ impl RoutingCanvas<'_> {
 pub fn auto_layout(snapshot: &Snapshot, size: Size) -> BTreeMap<String, (f32, f32)> {
     let cell_w = (size.width - 24.).max(14.) / 14.;
     let cell_h = (size.height - 24.).max(14.) / 6.;
-    let width = (cell_w - 6.).clamp(36., 82.);
-    let height = (cell_h - 8.).clamp(40., 58.);
+    let width = (cell_w - 20.).clamp(36., 64.);
+    let height = (cell_h - 16.).clamp(38., 46.);
     let mut positions = BTreeMap::new();
     for block in &snapshot.blocks {
         let col = usize::from(block.position.0).min(13);
@@ -450,12 +450,12 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
                     Size::new((cell_w - 4.).max(1.), (cell_h - 4.).max(1.)),
                     3.into(),
                 );
-                f.fill(&cell, iced::color!(0x0c1216));
+                f.fill(&cell, iced::color!(0x0a1115));
                 f.stroke(
                     &cell,
                     Stroke::default()
-                        .with_color(iced::color!(0x202a30))
-                        .with_width(0.7),
+                        .with_color(iced::color!(0x151f26))
+                        .with_width(0.5),
                 );
             }
         }
@@ -594,7 +594,7 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
             f.fill(
                 &Path::rounded_rectangle(
                     Point::new(p.x + 1., p.y + 3.),
-                    Size::new(4., height - 6.),
+                    Size::new(2., height - 6.),
                     3.into(),
                 ),
                 material.accent,
@@ -602,7 +602,7 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
             icon(
                 &mut f,
                 &b.family,
-                Point::new(p.x + width / 2., p.y + height * 0.29),
+                Point::new(p.x + width / 2., p.y + 14.),
                 material.accent,
             );
             let label = b.label.clone();
@@ -619,22 +619,10 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
                 } else {
                     label
                 },
-                position: Point::new(p.x + 4., p.y + height * 0.67),
+                position: Point::new(p.x + width / 2., p.y + 29.),
                 color: style::TEXT,
                 size: 9.into(),
-                ..Default::default()
-            });
-            f.fill_text(canvas::Text {
-                content: b
-                    .id
-                    .strip_prefix("cell-")
-                    .unwrap_or(&b.id)
-                    .chars()
-                    .take(7)
-                    .collect(),
-                position: Point::new(p.x + 4., p.y + height * 0.88),
-                color: style::MUTED,
-                size: 8.into(),
+                align_x: iced::alignment::Horizontal::Center.into(),
                 ..Default::default()
             });
             for pt in [
@@ -643,9 +631,9 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
                 Point::new(p.x + width / 2., p.y),
                 Point::new(p.x + width / 2., p.y + height),
             ] {
-                f.fill(&Path::circle(pt, 3.5), iced::color!(0x0a1118));
+                f.fill(&Path::circle(pt, 2.5), iced::color!(0x0a1118));
                 f.stroke(
-                    &Path::circle(pt, 3.),
+                    &Path::circle(pt, 2.),
                     Stroke::default()
                         .with_color(iced::color!(0x8dd0ff))
                         .with_width(1.),
@@ -662,5 +650,63 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
             .awake
             .set(awake || state.drag.is_some() || state.loose.is_some());
         vec![f.into_geometry()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axe_session::{Mock, Transport};
+
+    #[test]
+    fn compact_grid_keeps_all_cells_inside_viewport_and_separate() {
+        let mut snapshot = Mock::default().snapshot().unwrap();
+        let template = snapshot.blocks[0].clone();
+        snapshot.blocks.clear();
+        for row in 0..6 {
+            for col in 0..14 {
+                let mut block = template.clone();
+                block.id = format!("{row}-{col}");
+                block.position = (col, row);
+                snapshot.blocks.push(block);
+            }
+        }
+        for size in [
+            Size::new(700., 300.),
+            Size::new(1128., 730.),
+            Size::new(1800., 1000.),
+        ] {
+            let positions = BTreeMap::new();
+            let canvas = RoutingCanvas {
+                snapshot: &snapshot,
+                simple: true,
+                selected: None,
+                positions: &positions,
+                viewport: Default::default(),
+            };
+            let (width, height, position) = canvas.geometry(Rectangle::new(Point::ORIGIN, size));
+            assert!(width <= 64. && height <= 46.);
+            for block in &snapshot.blocks {
+                let p = position(block);
+                assert!(
+                    p.x >= 0.
+                        && p.y >= 0.
+                        && p.x + width <= size.width
+                        && p.y + height <= size.height
+                );
+                for other in &snapshot.blocks {
+                    if block.id == other.id {
+                        continue;
+                    }
+                    let q = position(other);
+                    assert!(
+                        p.x + width <= q.x
+                            || q.x + width <= p.x
+                            || p.y + height <= q.y
+                            || q.y + height <= p.y
+                    );
+                }
+            }
+        }
     }
 }

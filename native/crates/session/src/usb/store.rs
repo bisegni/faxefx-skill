@@ -99,47 +99,92 @@ pub fn store_preset_with(
         .map_err(|e| format!("Store request was sent; completion is unverified: {e}"))
 }
 
-struct MidiStoreWire {
+pub(super) trait PacketIo: Send {
+    fn send(&mut self, packet: &[u8]) -> Result<(), String>;
+    fn receive(&mut self, timeout: Duration) -> Result<Vec<u8>, mpsc::RecvTimeoutError>;
+    fn drain(&mut self);
+}
+struct MidiPackets {
     _input: midir::MidiInputConnection<()>,
     output: midir::MidiOutputConnection,
     replies: mpsc::Receiver<Vec<u8>>,
 }
+impl PacketIo for MidiPackets {
+    fn send(&mut self, packet: &[u8]) -> Result<(), String> {
+        self.output.send(packet).map_err(|e| e.to_string())
+    }
+    fn receive(&mut self, timeout: Duration) -> Result<Vec<u8>, mpsc::RecvTimeoutError> {
+        self.replies.recv_timeout(timeout)
+    }
+    fn drain(&mut self) {
+        while self.replies.try_recv().is_ok() {}
+    }
+}
+pub(super) struct MidiStoreWire {
+    last_send: Option<Instant>,
+    failed: bool,
+    pub(super) timeout: Duration,
+    io: Box<dyn PacketIo>,
+}
 impl StoreWire for MidiStoreWire {
     fn query(&mut self, packet: &[u8]) -> Result<Vec<u8>, String> {
         let (operation, request_payload) = unframe(packet)?;
-        // The read boundary accepts only the three exact preflight queries.
-        if packet != grid_query() && packet != frame(0x0c, &[127])? && packet != frame(0x13, &[])? {
-            return Err("Unsupported save preflight query".into());
+        if self.failed {
+            return Err("MIDI read failed; reconnect before reading again".into());
         }
-        while self.replies.try_recv().is_ok() {}
-        self.output.send(packet).map_err(|e| e.to_string())?;
-        let end = Instant::now() + Duration::from_secs(3);
+        let editor_read = operation == 1
+            && request_payload.len() == 15
+            && matches!(request_payload[0..2], [0x1a, 0] | [4, 1] | [0x2e, 0]);
+        if !editor_read && !matches!(operation, 0x0c | 0x0e | 0x13) {
+            return Err("Unsupported read query".into());
+        }
+        self.io.drain();
+        self.send_once(packet)?;
+        let end = Instant::now() + self.timeout;
         while let Some(remaining) = end.checked_duration_since(Instant::now()) {
-            let reply = self
-                .replies
-                .recv_timeout(remaining)
-                .map_err(|_| "Save preflight read timed out; no store was sent")?;
+            let reply = match self.io.receive(remaining) {
+                Ok(reply) => reply,
+                Err(_) => {
+                    // There is no request nonce on this protocol. Never reuse a timed-out
+                    // connection: a late matching reply could belong to its previous context.
+                    self.failed = true;
+                    return Err("MIDI read timed out; reconnect required".into());
+                }
+            };
             if reply == packet {
                 continue;
             }
             if let Ok((op, payload)) = unframe(&reply)
                 && op == operation
                 && (op != 1 || payload.get(..6) == request_payload.get(..6))
+                && (op != 0x0e || payload.first() == request_payload.first())
+                && (op != 0x0c || payload != [127])
             {
                 return Ok(reply);
             }
         }
-        Err("Save preflight timed out; no store was sent".into())
+        self.failed = true;
+        Err("MIDI read timed out; reconnect required".into())
     }
     fn send_once(&mut self, packet: &[u8]) -> Result<(), String> {
-        self.output.send(packet).map_err(|e| e.to_string())
+        if self.failed {
+            return Err("MIDI connection requires reconnect".into());
+        }
+        if let Some(last) = self.last_send {
+            std::thread::sleep(Duration::from_millis(25).saturating_sub(last.elapsed()));
+        }
+        self.last_send = Some(Instant::now());
+        self.io.send(packet).map_err(|e| {
+            self.failed = true;
+            e.to_string()
+        })
     }
     fn settle(&mut self) -> Result<(), String> {
         // Keep the serialized device owner busy for Axe-Edit's 10-second store
         // request window. An echo/other traffic is never treated as an ACK.
         let end = Instant::now() + Duration::from_secs(10);
         while let Some(remaining) = end.checked_duration_since(Instant::now()) {
-            match self.replies.recv_timeout(remaining) {
+            match self.io.receive(remaining) {
                 Ok(_) => {}
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -158,49 +203,54 @@ pub fn store_preset(
     destination: u16,
     durable_intent: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
-    preset_store(destination)?;
-    let mut input = MidiInput::new("Axe Studio preset save").map_err(|e| e.to_string())?;
-    input.ignore(Ignore::None);
-    let output = MidiOutput::new("Axe Studio preset save").map_err(|e| e.to_string())?;
-    let inputs = input
-        .ports()
-        .into_iter()
-        .filter(|p| input.port_name(p).ok().as_deref() == Some(input_name))
-        .collect::<Vec<_>>();
-    let outputs = output
-        .ports()
-        .into_iter()
-        .filter(|p| output.port_name(p).ok().as_deref() == Some(output_name))
-        .collect::<Vec<_>>();
-    if inputs.len() != 1 || outputs.len() != 1 {
-        return Err("Save requires the uniquely selected MIDI input and output".into());
+    let mut wire = MidiStoreWire::connect(input_name, output_name)?;
+    store_preset_with(&mut wire, expected, destination, durable_intent)
+}
+impl MidiStoreWire {
+    pub(super) fn connect(input_name: &str, output_name: &str) -> Result<Self, String> {
+        let mut input = MidiInput::new("Axe Studio preset save").map_err(|e| e.to_string())?;
+        input.ignore(Ignore::None);
+        let output = MidiOutput::new("Axe Studio preset save").map_err(|e| e.to_string())?;
+        let inputs = input
+            .ports()
+            .into_iter()
+            .filter(|p| input.port_name(p).ok().as_deref() == Some(input_name))
+            .collect::<Vec<_>>();
+        let outputs = output
+            .ports()
+            .into_iter()
+            .filter(|p| output.port_name(p).ok().as_deref() == Some(output_name))
+            .collect::<Vec<_>>();
+        if inputs.len() != 1 || outputs.len() != 1 {
+            return Err("Save requires the uniquely selected MIDI input and output".into());
+        }
+        let (tx, replies) = mpsc::sync_channel::<Vec<u8>>(64);
+        let connection = input
+            .connect(
+                &inputs[0],
+                "Axe Studio preset save",
+                move |_, bytes, _| {
+                    if bytes.len() <= 4096 {
+                        let _ = tx.try_send(bytes.to_vec());
+                    }
+                },
+                (),
+            )
+            .map_err(|e| e.to_string())?;
+        let output = output
+            .connect(&outputs[0], "Axe Studio preset save")
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            io: Box::new(MidiPackets {
+                _input: connection,
+                output,
+                replies,
+            }),
+            last_send: None,
+            failed: false,
+            timeout: Duration::from_secs(3),
+        })
     }
-    let (tx, replies) = mpsc::sync_channel::<Vec<u8>>(64);
-    let connection = input
-        .connect(
-            &inputs[0],
-            "Axe Studio preset save",
-            move |_, bytes, _| {
-                if bytes.len() <= 4096 {
-                    let _ = tx.try_send(bytes.to_vec());
-                }
-            },
-            (),
-        )
-        .map_err(|e| e.to_string())?;
-    let output = output
-        .connect(&outputs[0], "Axe Studio preset save")
-        .map_err(|e| e.to_string())?;
-    store_preset_with(
-        &mut MidiStoreWire {
-            _input: connection,
-            output,
-            replies,
-        },
-        expected,
-        destination,
-        durable_intent,
-    )
 }
 
 #[cfg(test)]
@@ -390,5 +440,128 @@ mod tests {
             }));
             assert_eq!(wire.sends.len(), 1);
         }
+    }
+    type SentPackets = std::sync::Arc<std::sync::Mutex<Vec<(Instant, Vec<u8>)>>>;
+    struct Packets {
+        replies: VecDeque<Result<Vec<u8>, mpsc::RecvTimeoutError>>,
+        sends: SentPackets,
+    }
+    impl PacketIo for Packets {
+        fn send(&mut self, packet: &[u8]) -> Result<(), String> {
+            self.sends
+                .lock()
+                .unwrap()
+                .push((Instant::now(), packet.to_vec()));
+            Ok(())
+        }
+        fn receive(&mut self, _: Duration) -> Result<Vec<u8>, mpsc::RecvTimeoutError> {
+            self.replies
+                .pop_front()
+                .unwrap_or(Err(mpsc::RecvTimeoutError::Timeout))
+        }
+        fn drain(&mut self) {}
+    }
+    fn injected(
+        replies: Vec<Result<Vec<u8>, mpsc::RecvTimeoutError>>,
+    ) -> (MidiStoreWire, SentPackets) {
+        let sends = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
+        (
+            MidiStoreWire {
+                last_send: None,
+                failed: false,
+                timeout: Duration::from_millis(1),
+                io: Box::new(Packets {
+                    replies: replies.into(),
+                    sends: sends.clone(),
+                }),
+            },
+            sends,
+        )
+    }
+    fn token_reply(effect: u16, value: u8) -> Vec<u8> {
+        let request = crate::protocol::block_token_getter(effect).unwrap();
+        let (_, p) = unframe(&request).unwrap();
+        let mut p = p.to_vec();
+        p[6] = value;
+        frame(1, &p).unwrap()
+    }
+    #[test]
+    fn persistent_wire_serializes_scene_save_and_polling_with_rate_limit() {
+        let (snapshot, grid, status) = fixture();
+        let replies = vec![
+            Ok(frame(0x0c, &[2]).unwrap()),
+            Ok(token_reply(58, 1)),
+            Ok(grid.clone()),
+            Ok(frame(0x0c, &[2]).unwrap()),
+            Ok(status.clone()),
+            Ok(grid),
+            Ok(frame(0x0c, &[2]).unwrap()),
+            Ok(status),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            Ok(token_reply(58, 2)),
+        ];
+        let (mut wire, sends) = injected(replies);
+        super::super::select_scene_with(&mut wire, 2).unwrap();
+        let query = crate::protocol::block_token_getter(58).unwrap();
+        wire.query(&query).unwrap();
+        let mut intents = 0;
+        store_preset_with(&mut wire, &snapshot, 17, || {
+            intents += 1;
+            Ok(())
+        })
+        .unwrap();
+        wire.query(&query).unwrap();
+        assert_eq!(intents, 1);
+        let sends = sends.lock().unwrap();
+        let store_index = sends
+            .iter()
+            .position(|(_, p)| p == &preset_store(17).unwrap())
+            .unwrap();
+        assert_eq!(store_index, 9);
+        assert_eq!(sends.len(), 11);
+        assert_eq!(
+            sends
+                .iter()
+                .filter(|(_, p)| p == &preset_store(17).unwrap())
+                .count(),
+            1
+        );
+        for pair in sends.windows(2) {
+            assert!(pair[1].0.duration_since(pair[0].0) >= Duration::from_millis(25));
+        }
+    }
+    #[test]
+    fn timed_out_wire_rejects_late_reply_and_requires_a_new_connection() {
+        let query = crate::protocol::block_token_getter(58).unwrap();
+        let (mut old, sends) = injected(vec![
+            Err(mpsc::RecvTimeoutError::Timeout),
+            Ok(token_reply(58, 1)),
+        ]);
+        assert!(old.query(&query).is_err());
+        assert!(old.query(&query).is_err());
+        assert!(old.send_once(&preset_store(17).unwrap()).is_err());
+        assert_eq!(sends.lock().unwrap().len(), 1);
+        let (mut new, _) = injected(vec![Ok(token_reply(58, 2))]);
+        assert_eq!(
+            crate::protocol::block_token_readback(&new.query(&query).unwrap(), 58)
+                .unwrap()
+                .0,
+            2
+        );
+    }
+    #[test]
+    fn persistent_wire_ignores_other_block_replies_and_echoes() {
+        let query = crate::protocol::block_token_getter(58).unwrap();
+        let (mut wire, _) = injected(vec![
+            Ok(query.clone()),
+            Ok(token_reply(59, 2)),
+            Ok(token_reply(58, 3)),
+        ]);
+        assert_eq!(
+            crate::protocol::block_token_readback(&wire.query(&query).unwrap(), 58)
+                .unwrap()
+                .0,
+            3
+        );
     }
 }

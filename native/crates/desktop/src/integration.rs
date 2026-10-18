@@ -326,7 +326,10 @@ impl Studio {
                 self.runtime_applied=request;if binding{self.device_busy=false;}
                 match result {
                 Ok(view) => {
-                    self.snapshot = view.snapshot.or_else(|| self.snapshot.clone());
+                    if request >= self.snapshot_applied {
+                        self.snapshot = view.snapshot.or_else(|| self.snapshot.clone());
+                        self.snapshot_applied = request;
+                    }
                     self.history = view.history;
                     self.dirty = view.dirty;
                     self.recovery = view.recovery;
@@ -335,7 +338,10 @@ impl Studio {
             }
             if self.resolve_pending&&!self.dirty&&!self.recovery{self.resolve_pending=false;let pending=self.pending.take();return Some(self.continue_pending(pending))}
             }
-            Message::SelectBlock(id) => self.selected_block = Some(id),
+            Message::SelectBlock(id) => {
+                self.selected_block = Some(id);
+                self.selection_revision += 1;
+            },
             Message::MoveBlock(id,point)=>{self.block_positions.insert(id,point);},
             Message::UnsupportedRouting=>self.status="Structural routing changes are not verified. The confirmed device connection is unchanged.".into(),
             Message::PreviewAdjust(block, parameter, value) => {

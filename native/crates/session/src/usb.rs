@@ -1,4 +1,5 @@
 //! MIDI capture and explicit, typed user-operated device commands.
+pub mod live;
 mod store;
 use crate::protocol::{Grid, decode_grid, frame, grid_query, unframe};
 use axe_domain::*;
@@ -29,76 +30,103 @@ pub struct Endpoints {
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
 }
-pub fn endpoints() -> Result<Endpoints, String> {
-    let input = MidiInput::new("Axe Studio read-only discovery").map_err(|e| e.to_string())?;
-    let output = MidiOutput::new("Axe Studio read-only discovery").map_err(|e| e.to_string())?;
-    Ok(Endpoints {
-        inputs: input
-            .ports()
-            .iter()
-            .map(|p| input.port_name(p).map_err(|e| e.to_string()))
-            .collect::<Result<_, _>>()?,
-        outputs: output
-            .ports()
-            .iter()
-            .map(|p| output.port_name(p).map_err(|e| e.to_string()))
-            .collect::<Result<_, _>>()?,
-    })
+type DiscoveryReply = mpsc::SyncSender<Result<Endpoints, String>>;
+
+fn discovery_loop(
+    requests: mpsc::Receiver<DiscoveryReply>,
+    mut scan: impl FnMut() -> Result<Endpoints, String>,
+    mut pump: impl FnMut(),
+) {
+    loop {
+        pump();
+        match requests.recv_timeout(Duration::from_millis(50)) {
+            Ok(reply) => {
+                let _ = reply.send(scan());
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
 }
+
+/// Discovery has a stable thread/client lifetime. On macOS its CoreFoundation
+/// run loop is serviced between scans so CoreMIDI can process hot-plug changes.
+/// No endpoint is opened and no MIDI packet is sent by this service.
+pub fn endpoints() -> Result<Endpoints, String> {
+    static REQUESTS: OnceLock<Result<mpsc::Sender<DiscoveryReply>, String>> = OnceLock::new();
+    let requests = REQUESTS
+        .get_or_init(|| {
+            let (tx, rx) = mpsc::channel::<DiscoveryReply>();
+            std::thread::Builder::new()
+                .name("axe-midi-discovery".into())
+                .spawn(move || {
+                    let mut clients = None;
+                    discovery_loop(
+                        rx,
+                        || {
+                            if clients.is_none() {
+                                clients = Some((
+                                    MidiInput::new("Axe Studio discovery")
+                                        .map_err(|e| e.to_string())?,
+                                    MidiOutput::new("Axe Studio discovery")
+                                        .map_err(|e| e.to_string())?,
+                                ));
+                            }
+                            let (input, output) = clients.as_ref().unwrap();
+                            Ok(Endpoints {
+                                inputs: input
+                                    .ports()
+                                    .iter()
+                                    .map(|p| input.port_name(p).map_err(|e| e.to_string()))
+                                    .collect::<Result<_, _>>()?,
+                                outputs: output
+                                    .ports()
+                                    .iter()
+                                    .map(|p| output.port_name(p).map_err(|e| e.to_string()))
+                                    .collect::<Result<_, _>>()?,
+                            })
+                        },
+                        service_discovery_run_loop,
+                    );
+                })
+                .map(|_| tx)
+                .map_err(|e| e.to_string())
+        })
+        .as_ref()
+        .map_err(Clone::clone)?;
+    let (tx, rx) = mpsc::sync_channel(1);
+    requests
+        .send(tx)
+        .map_err(|_| "MIDI discovery service stopped")?;
+    rx.recv_timeout(Duration::from_secs(5))
+        .map_err(|_| "MIDI discovery timed out".to_string())?
+}
+
+#[cfg(target_os = "macos")]
+fn service_discovery_run_loop() {
+    use std::ffi::c_void;
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        static kCFRunLoopDefaultMode: *const c_void;
+        fn CFRunLoopRunInMode(mode: *const c_void, seconds: f64, return_after_source: u8) -> i32;
+    }
+    // CoreFoundation owns the constant; this is always called on the same
+    // discovery thread that owns the MIDI clients, never on the UI thread.
+    unsafe {
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.001, 0);
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn service_discovery_run_loop() {}
 /// A bounded capture owns both endpoints for its duration. Queues and queries are bounded.
 /// Writes remain unavailable; no mutating packet can be supplied by callers.
 pub fn capture(input_name: &str, output_name: &str) -> Result<Snapshot, String> {
-    let mut input = MidiInput::new("Axe Studio capture").map_err(|e| e.to_string())?;
-    input.ignore(Ignore::None);
-    let output = MidiOutput::new("Axe Studio capture").map_err(|e| e.to_string())?;
-    let ins = input
-        .ports()
-        .into_iter()
-        .filter(|p| input.port_name(p).ok().as_deref() == Some(input_name))
-        .collect::<Vec<_>>();
-    let outs = output
-        .ports()
-        .into_iter()
-        .filter(|p| output.port_name(p).ok().as_deref() == Some(output_name))
-        .collect::<Vec<_>>();
-    if ins.len() != 1 || outs.len() != 1 {
-        return Err("Select unique MIDI input/output endpoints".into());
-    }
-    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(64);
-    let _connection = input
-        .connect(
-            &ins[0],
-            "Axe Studio read-only",
-            move |_, bytes, _| {
-                if bytes.len() <= 4096 {
-                    let _ = tx.try_send(bytes.to_vec());
-                }
-            },
-            (),
-        )
-        .map_err(|e| e.to_string())?;
-    let mut output = output
-        .connect(&outs[0], "Axe Studio read-only")
-        .map_err(|e| e.to_string())?;
-    let mut query = |packet: Vec<u8>, opcode: u8, timeout: Duration| -> Result<Vec<u8>, String> {
-        while rx.try_recv().is_ok() {}
-        output.send(&packet).map_err(|e| e.to_string())?;
-        let end = Instant::now() + timeout;
-        while let Some(remaining) = end.checked_duration_since(Instant::now()) {
-            let bytes = rx
-                .recv_timeout(remaining)
-                .map_err(|_| "Read timed out; no write was sent".to_string())?;
-            if let Ok((op, p)) = unframe(&bytes)
-                && op == opcode
-                && (op != 1 || (p.len() >= 15 && p[..6] == unframe(&packet)?.1[..6]))
-                && bytes != packet
-                && (op != 0x0c || p != [127])
-            {
-                return Ok(bytes);
-            }
-        }
-        Err("Read timed out".into())
-    };
+    let mut wire = store::MidiStoreWire::connect(input_name, output_name)?;
+    capture_with(&mut wire)
+}
+
+pub fn capture_with(wire: &mut impl StoreWire) -> Result<Snapshot, String> {
+    let mut query = |packet: Vec<u8>, _opcode: u8, _timeout: Duration| wire.query(&packet);
     let standard_timeout = Duration::from_secs(3);
     let first = decode_grid(&query(grid_query(), 1, standard_timeout)?)?;
     let scene = read_scene(&query(frame(0x0c, &[127])?, 0x0c, standard_timeout)?)?;
@@ -135,74 +163,10 @@ pub fn capture(input_name: &str, output_name: &str) -> Result<Snapshot, String> 
         let (_, _, _, prefix) = block_identity(effect);
         let Some(prefix) = prefix else { continue };
         for (id, name) in parameter_specs(&prefix) {
-            let result = query(
-                crate::protocol::parameter_getter(effect, id)?,
-                1,
-                Duration::from_millis(250),
-            )
-            .and_then(|reply| {
-                crate::protocol::parameter_readback(&reply, effect, id)
-                    .map(|decoded| (reply, decoded))
-            });
-            let (reply, decoded, read_error) = match result {
-                Ok((reply, decoded)) => (Some(reply), Some(decoded), None),
-                Err(error) => (None, None, Some(error)),
-            };
-            let (raw_bits, raw_numeric, display_text) = decoded
-                .map(|(bits, raw, text)| {
-                    (Some(bits), Some(raw), (!text.is_empty()).then_some(text))
-                })
-                .unwrap_or((None, None, None));
-            let amp_verified =
-                (58..=61).contains(&effect) && [0, 1, 2, 3, 4, 5, 20, 21].contains(&id);
-            let converted = if amp_verified {
-                reply.as_ref().and_then(|r| {
-                    crate::protocol::amp_readback(r, effect, id)
-                        .ok()
-                        .and_then(|(_, value, _)| value)
-                })
-            } else {
-                None
-            };
-            let conversion_error = (reply.is_some()
-                && amp_verified
-                && [1, 2, 3, 4, 5, 20].contains(&id)
-                && converted.is_none())
-            .then(|| "Device reply did not match the verified amp knob conversion".into());
-            let read_status = if raw_bits.is_none() {
-                "unavailable"
-            } else if conversion_error.is_some() {
-                "conversion-unverified"
-            } else if amp_verified {
-                "verified-device-read"
-            } else {
-                "device-reply-unverified-getter"
-            };
-            let error = read_error.or(conversion_error);
-            let unit = if converted.is_some() {
-                "knob"
-            } else if raw_numeric.is_some() {
-                "device raw"
-            } else {
-                "device text"
-            };
             block_reads
                 .entry(effect)
                 .or_insert_with(Vec::new)
-                .push(Parameter {
-                    id: id.to_string(),
-                    label: name,
-                    unit: unit.into(),
-                    confirmed: converted,
-                    display_text,
-                    raw_numeric,
-                    read_status: Some(read_status.into()),
-                    read_error: error,
-                    range: converted.map(|_| (0., 10.)),
-                    writable: false,
-                    automated: None,
-                    raw_bits,
-                });
+                .push(live::unavailable_parameter(id, name));
         }
     }
     let status_after = query(frame(0x13, &[])?, 0x13, standard_timeout)?;
@@ -263,65 +227,23 @@ pub fn select_scene(input_name: &str, output_name: &str, scene: u8) -> Result<()
     if scene > 7 {
         return Err("Scene must be 1–8".into());
     }
-    let mut input = MidiInput::new("Axe Studio scene selection").map_err(|e| e.to_string())?;
-    input.ignore(Ignore::None);
-    let output = MidiOutput::new("Axe Studio scene selection").map_err(|e| e.to_string())?;
-    let ins = input
-        .ports()
-        .into_iter()
-        .filter(|p| input.port_name(p).ok().as_deref() == Some(input_name))
-        .collect::<Vec<_>>();
-    let outs = output
-        .ports()
-        .into_iter()
-        .filter(|p| output.port_name(p).ok().as_deref() == Some(output_name))
-        .collect::<Vec<_>>();
-    if ins.len() != 1 || outs.len() != 1 {
-        return Err("Select unique MIDI input/output endpoints".into());
-    }
-    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(64);
-    let _connection = input
-        .connect(
-            &ins[0],
-            "Axe Studio scene selection",
-            move |_, bytes, _| {
-                if bytes.len() <= 4096 {
-                    let _ = tx.try_send(bytes.to_vec());
-                }
-            },
-            (),
-        )
-        .map_err(|e| e.to_string())?;
-    let mut output = output
-        .connect(&outs[0], "Axe Studio scene selection")
-        .map_err(|e| e.to_string())?;
-    while rx.try_recv().is_ok() {}
-    output
-        .send(&frame(0x0c, &[scene])?)
-        .map_err(|e| e.to_string())?;
-    let end = Instant::now() + Duration::from_millis(100);
-    while let Some(remaining) = end.checked_duration_since(Instant::now()) {
-        match rx.recv_timeout(remaining) {
-            Ok(_) => continue,
-            Err(_) => break,
-        }
-    }
-    output
-        .send(&frame(0x0c, &[127])?)
-        .map_err(|e| e.to_string())?;
-    let end = Instant::now() + Duration::from_secs(3);
-    while let Some(remaining) = end.checked_duration_since(Instant::now()) {
-        let bytes = rx
-            .recv_timeout(remaining)
-            .map_err(|_| "Scene selection readback timed out".to_string())?;
-        if let Ok((0x0c, payload)) = unframe(&bytes)
-            && payload == [scene]
-        {
-            return Ok(());
-        }
-    }
-    Err("Scene selection was not confirmed".into())
+    let mut wire = store::MidiStoreWire::connect(input_name, output_name)?;
+    select_scene_with(&mut wire, scene)
 }
+
+pub fn select_scene_with(wire: &mut impl StoreWire, scene: u8) -> Result<(), String> {
+    if scene > 7 {
+        return Err("Scene must be 1–8".into());
+    }
+    wire.send_once(&frame(0x0c, &[scene])?)?;
+    std::thread::sleep(Duration::from_millis(100));
+    let actual = read_scene(&wire.query(&frame(0x0c, &[127])?)?)?;
+    if actual != scene {
+        return Err("Scene selection was not confirmed".into());
+    }
+    Ok(())
+}
+
 fn snapshot(grid: Grid, scene: u8) -> Result<Snapshot, String> {
     let mut used = BTreeSet::new();
     let mut occupied = BTreeSet::new();
@@ -505,5 +427,53 @@ mod tests {
         let reply = frame(0x0e, &payload).unwrap();
         assert_eq!(read_scene_name(&reply, 2).unwrap(), "Lead");
         assert!(read_scene_name(&reply, 1).is_err());
+    }
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+    #[test]
+    fn persistent_discovery_sees_late_devices_and_recovers_from_scan_error() {
+        // No CoreMIDI client or endpoint is opened: only inject catalog changes.
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut scans = 0;
+            let mut pumped = false;
+            discovery_loop(
+                rx,
+                || {
+                    scans += 1;
+                    if scans == 2 {
+                        return Err("transient catalog failure".into());
+                    }
+                    let names = if scans >= 3 {
+                        vec!["Axe-Fx III".into()]
+                    } else {
+                        vec![]
+                    };
+                    Ok(Endpoints {
+                        inputs: names.clone(),
+                        outputs: names,
+                    })
+                },
+                || {
+                    pumped = true;
+                },
+            );
+            assert!(pumped);
+            assert_eq!(scans, 4);
+        });
+        let scan = || {
+            let (reply, result) = mpsc::sync_channel(1);
+            tx.send(reply).unwrap();
+            result.recv_timeout(Duration::from_secs(1)).unwrap()
+        };
+        assert!(scan().unwrap().inputs.is_empty());
+        assert!(scan().is_err());
+        assert_eq!(scan().unwrap().inputs, ["Axe-Fx III"]);
+        assert_eq!(scan().unwrap().outputs, ["Axe-Fx III"]);
+        drop(tx);
+        worker.join().unwrap();
     }
 }

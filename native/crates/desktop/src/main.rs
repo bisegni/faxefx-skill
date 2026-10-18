@@ -83,6 +83,9 @@ enum Message {
     CompareAudio,
     Retry,
     DiscoveryTick,
+    LiveTick,
+    LiveResult(u64, u64, u64, Result<Snapshot, String>),
+    InspectorVisibility(String, String, String, bool),
     AutoLayout,
     Choose(axe_agents::Provider),
     Drag(pane_grid::DragEvent),
@@ -124,6 +127,7 @@ struct Studio {
     backend: Option<axe_runtime::Shared>,
     runtime_request: std::cell::Cell<u64>,
     runtime_applied: u64,
+    snapshot_applied: u64,
     resolve_pending: bool,
     data_root: std::path::PathBuf,
     agent: Option<axe_agents::runtime::AgentHandle>,
@@ -142,6 +146,9 @@ struct Studio {
     recovery: bool,
     device_busy: bool,
     selected_block: Option<String>,
+    visible_parameters: std::collections::BTreeSet<(String, String)>,
+    live_pending: bool,
+    selection_revision: u64,
     block_positions: std::collections::BTreeMap<String, (f32, f32)>,
     routing_viewport: std::sync::Arc<std::sync::Mutex<iced::Size>>,
     pending_parameters: std::collections::BTreeMap<(String, String), f64>,
@@ -243,6 +250,7 @@ impl Default for Studio {
             backend,
             runtime_request: std::cell::Cell::new(0),
             runtime_applied: 0,
+            snapshot_applied: 0,
             resolve_pending: false,
             data_root,
             agent: None,
@@ -261,6 +269,9 @@ impl Default for Studio {
             recovery: false,
             device_busy: false,
             selected_block: None,
+            visible_parameters: Default::default(),
+            live_pending: false,
+            selection_revision: 0,
             block_positions: Default::default(),
             routing_viewport: std::sync::Arc::new(std::sync::Mutex::new(iced::Size::new(
                 680., 420.,
@@ -342,6 +353,97 @@ impl Studio {
                     return self.bind_runtime();
                 }
             }
+            Message::InspectorVisibility(session, block, parameter, visible) => {
+                if self
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.context.session == session)
+                {
+                    let key = (block, parameter);
+                    let changed = if visible {
+                        self.visible_parameters.insert(key)
+                    } else {
+                        self.visible_parameters.remove(&key)
+                    };
+                    if changed {
+                        self.selection_revision += 1;
+                    }
+                }
+            }
+            Message::LiveTick => {
+                if self.live_pending
+                    || self.device_busy
+                    || self.busy
+                    || !self
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.context.target == axe_domain::Target::Hardware)
+                {
+                    return iced::Task::none();
+                }
+                let Some(backend) = self.backend.clone() else {
+                    return iced::Task::none();
+                };
+                let block = self.snapshot.as_ref().and_then(|s| {
+                    s.blocks
+                        .iter()
+                        .find(|b| self.selected_block.as_ref() == Some(&b.id))
+                        .or_else(|| s.blocks.iter().find(|b| !b.parameters.is_empty()))
+                        .or_else(|| s.blocks.first())
+                });
+                let selected = block.map(|b| b.id.clone());
+                let visible = block
+                    .map(|b| {
+                        b.parameters
+                            .iter()
+                            .filter(|p| {
+                                self.visible_parameters
+                                    .contains(&(b.id.clone(), p.id.clone()))
+                            })
+                            .map(|p| p.id.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.live_pending = true;
+                let epoch = self.epoch;
+                let revision = self.selection_revision;
+                let request = self.runtime_request.get() + 1;
+                self.runtime_request.set(request);
+                let session = self.snapshot.as_ref().unwrap().context.session.clone();
+                return iced::Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            backend
+                                .lock()
+                                .map_err(|_| "Backend unavailable")?
+                                .synchronize(&session, selected, visible)
+                        })
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r)
+                    },
+                    move |result| Message::LiveResult(epoch, revision, request, result),
+                );
+            }
+            Message::LiveResult(epoch, revision, request, result) => {
+                self.live_pending = false;
+                if epoch == self.epoch
+                    && revision == self.selection_revision
+                    && request >= self.snapshot_applied
+                    && !self.device_busy
+                    && !self.busy
+                    && self
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.context.target == axe_domain::Target::Hardware)
+                {
+                    self.snapshot_applied = request;
+                    match result {
+                        Ok(snapshot) => self.snapshot = Some(snapshot),
+                        Err(error) => self.status = error,
+                    }
+                }
+            }
             Message::DiscoveryTick => {
                 if self.snapshot.is_none() && !self.busy && self.backend.is_some() {
                     self.busy = true;
@@ -396,13 +498,33 @@ impl Studio {
                             })
                             .cloned()
                             .collect::<Vec<_>>();
+                        if self
+                            .input
+                            .as_ref()
+                            .is_some_and(|n| !ports.inputs.contains(n))
+                        {
+                            self.input = None;
+                        }
+                        if self
+                            .output
+                            .as_ref()
+                            .is_some_and(|n| !ports.outputs.contains(n))
+                        {
+                            self.output = None;
+                        }
+                        let absent = inputs.is_empty() && outputs.is_empty();
                         self.endpoints = Some(ports);
                         if inputs.len() == 1 && outputs.len() == 1 {
                             self.input = Some(inputs[0].clone());
                             self.output = Some(outputs[0].clone());
                             return self.update(Message::Capture);
                         }
-                        self.status="Select MIDI input/output and Read USB, or explicitly choose Test mock.".into();
+                        self.status = if absent {
+                            "Waiting for Axe-Fx USB MIDI… Power on the device; discovery retries automatically.".into()
+                        } else {
+                            "Select MIDI input/output and Read USB, or explicitly choose Test mock."
+                                .into()
+                        };
                     }
                     Err(e) => self.status = format!("USB discovery failed: {e}"),
                 }
@@ -440,12 +562,17 @@ impl Studio {
                     self.epoch += 1;
                     let epoch = self.epoch;
                     self.snapshot = None;
+                    self.visible_parameters.clear();
                     self.status =
                         "Reading routing and catalogued block parameters (read-only)…".into();
+                    let backend = self.backend.clone().unwrap();
                     return iced::Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || {
-                                axe_session::usb::capture(&input, &output)
+                                backend
+                                    .lock()
+                                    .map_err(|_| "Backend unavailable")?
+                                    .capture_hardware(input, output)
                             })
                             .await
                             .map_err(|e| e.to_string())
@@ -514,8 +641,7 @@ impl Studio {
                         move |result| Message::SceneResult(epoch, result),
                     );
                 }
-                let (Some(input), Some(output)) = (self.input.clone(), self.output.clone()) else {
-                    self.status = "Select both MIDI endpoints before changing the scene.".into();
+                let Some(backend) = self.backend.clone() else {
                     self.device_busy = false;
                     return iced::Task::none();
                 };
@@ -523,8 +649,10 @@ impl Studio {
                 return iced::Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
-                            axe_session::usb::select_scene(&input, &output, scene)?;
-                            axe_session::usb::capture(&input, &output)
+                            backend
+                                .lock()
+                                .map_err(|_| "Backend unavailable")?
+                                .select_scene(scene)
                         })
                         .await
                         .map_err(|e| e.to_string())
@@ -677,8 +805,9 @@ fn main() -> iced::Result {
                 }),
                 s.agent_subscription(),
                 s.audio_subscription(),
+                iced::time::every(std::time::Duration::from_millis(25)).map(|_| Message::LiveTick),
             ];
-            if s.snapshot.is_none() && !s.busy && s.backend.is_some() {
+            if s.snapshot.is_none() && s.backend.is_some() {
                 subscriptions.push(
                     iced::time::every(std::time::Duration::from_secs(2))
                         .map(|_| Message::DiscoveryTick),

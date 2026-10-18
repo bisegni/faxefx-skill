@@ -10,7 +10,7 @@ Open `Axe Studio.app`; it bundles the audio interpreter and dependencies.
 
 1. Launch without a terminal or system Python. Confirm the native window appears
    before discovery; USB failure must not silently choose mock.
-2. Start the app before powering on the Axe-Fx. Confirm endpoint discovery finds it after power-on; use Retry if needed. In Test mock, use Auto layout, resize the window and run Auto layout again. Verify all five panes, drag/swap them, save
+2. Start the app before powering on the Axe-Fx. Confirm endpoint discovery finds it after power-on without restarting the app. If it fails, note the status before trying Retry. In Test mock, use Auto layout, resize the window and run Auto layout again. Verify smaller effect cards, clear cable gaps, all five panes, drag/swap them, save
    and reload a named layout, reset, and check 1280×850 plus your display scales.
 3. Select Codex, verify explicit skill initialization, send a tonal direction,
    inspect streaming/tool activity and stop mid-turn. Confirm no later mutation
@@ -39,3 +39,26 @@ real Claude authentication, cross-platform physical checks and full accessibilit
 remain open gates. Completing the checklist does not resolve the missing hardware
 implementation. No destructive cleanup, main replacement or history rewrite is
 performed before explicit acceptance of the completed application.
+
+
+## Live synchronization candidate
+
+Build-only candidate: `dist/axe-studio-darwin-arm64-release-live-sync/Axe Studio.app`.
+The implementation agent does not launch this candidate or access MIDI hardware.
+
+Manual acceptance:
+
+1. Quit competing editors, launch the candidate yourself and use Read USB.
+2. Select Amp 1. Turn front-panel Gain; verify the device text and knob follow,
+   with no parameter editing enabled in Axe Studio. Check channel and scene changes.
+3. Scroll the inspector. Newly visible rows should read promptly; cached/offscreen
+   rows must not appear newly confirmed merely because another block changed.
+4. Select additional effect types. Device text may be shown with an unverified
+   getter label; unknown numeric conversions must leave knobs unavailable.
+5. Change the selected model and preset, then unplug/reconnect USB. Obsolete values
+   must clear. Use Read USB after a timed-out connection.
+6. Check explicit scene selection and the existing Save dialog. Confirm the Save
+   result describes transmission only. Verify persistence on the device manually.
+
+Automation verifies injected protocol behavior, packaging and code quality only;
+front-panel latency, exact viewport behavior and hardware persistence remain open.
