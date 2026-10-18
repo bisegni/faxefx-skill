@@ -1,7 +1,0 @@
-interface:
-  display_name: "Axe-Fx III Preset Assistant"
-  short_description: "Design tones with a visual canvas and approved CLI previews"
-  default_prompt: "Use $axefx-preset to inspect my preset or design a tone from my description or recording, show the routing, and preview supported changes."
-
-policy:
-  allow_implicit_invocation: true

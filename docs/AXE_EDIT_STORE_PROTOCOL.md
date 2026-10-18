@@ -16,8 +16,8 @@ have not been tested by this investigation.
 - REA/Hopper confirms state-machine sequence insertion at `0x10008bc74`,
   Evidence `ev_86de6eff9b639e04a5784a0f5919d789e8c16fc20e35cb34f27c1c42af24f3c5`.
 - Focused ARM64 instruction reads and the embedded jump table establish the
-  following chain. The reproducible verifier checks the executable hash,
-  branch destinations, operation constant, field stores and timeout directly.
+  following chain. The recorded evidence identifies the executable hash,
+  branch destinations, operation constant, field stores and timeout.
 - No Axe-Edit process was executed and no MIDI endpoint was opened.
 
 ## Recovered chain
@@ -52,24 +52,21 @@ It does not reset the index field. The containing object's constructor at
 `0x1002de89c..0x1002de8ac` allocates and zeroes its `0x830`-byte request/reply
 buffer, establishing an initial index of zero. Its value after arbitrary prior
 commands has not been exhaustively traced. Zero-index packets produced by the
-verifier are explicitly synthetic candidates rather than captured traffic.
+Rust packet constructor are synthetic requests rather than captured traffic.
 
-## Reproduce offline
+## Verify the native implementation offline
 
 From the repository root:
 
 ```sh
-python3 tools/verify_editor_store_evidence.py \
-  --app '/Applications/Axe-Edit III.app' --slot 0
+cargo test -p axe-session --locked usb::store
 ```
 
-The script only reads the app bundle and constructs an offline example. It
-rejects other executable builds, checks the actual ARM64 instructions, and
-does not import a MIDI transport or execute the target. The example slot is
-not permission to write that slot.
-
-The full static caller inventory and disassembly from this investigation are
-local scratch artifacts under `.local/re/`; they are not package resources.
+These injected-transport tests check the integer destination, context preflight,
+durable intent, one transmission, timeout/disconnect handling and serialized device
+ownership. They do not execute Axe-Edit, open MIDI endpoints or independently
+revalidate the instruction addresses against an installed executable. The static
+trace above remains separate from hardware acceptance.
 
 ## Remaining verification
 

@@ -37,4 +37,4 @@ Static reverse engineering identifies editor operation `0x0026` inside outer
 command `0x01` as Axe-Edit's preset-store request, with the destination in the
 32-bit value field. It powers the user-operated Save action; acknowledgement handling
 and save/reload persistence remain unverified. See the
-[instruction trace and offline verifier](../docs/AXE_EDIT_STORE_PROTOCOL.md).
+[instruction trace and offline tests](../docs/AXE_EDIT_STORE_PROTOCOL.md).

@@ -1,4 +1,0 @@
-# Optional reference measurements. No MIDI command imports these packages.
-numpy>=2,<3
-scipy>=1.14,<2
-soundfile>=0.13,<0.14

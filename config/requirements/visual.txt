@@ -1,2 +1,0 @@
-# Optional CLI PNG rendering; browser PNG export has no Python dependency.
-Pillow>=11,<14

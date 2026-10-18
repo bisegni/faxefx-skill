@@ -1,3 +1,0 @@
-# Optional, large local model runtime. Audio is never uploaded.
--r audio.txt
-audio-separator[cpu]==0.41.1

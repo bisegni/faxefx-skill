@@ -1,4 +1,0 @@
-# Third-party dependencies only. The CLI itself runs directly from tools/axefx.py.
-filelock>=3,<4
-platformdirs>=4,<5
-python-rtmidi==1.5.8

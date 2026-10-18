@@ -5,11 +5,9 @@ transactions, provider integration, storage, audio artifacts and playback. A
 bundled standalone Python process performs local audio measurements over private
 versioned stdio JSON-RPC. End users do not install Python or start a server.
 
-This implementation follows the approved Rust architecture in the user handoff.
-Older Python-backend proposals in `todo/` are historical design material and do
-not describe this application. Legacy source remains available for reference and
-is excluded from native packages. Cleanup and main-history replacement require
-explicit acceptance.
+The Rust workspace is the application entry point. The Python audio worker and
+native packaging scripts are its only Python support components. The root
+[README](../README.md) describes setup, dependencies and repository layout.
 
 Start development with `cargo run -p axe-desktop`. A device must be selected
 before choosing Codex or Claude. USB failure offers endpoint selection and retry;
