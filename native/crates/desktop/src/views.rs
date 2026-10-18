@@ -268,6 +268,7 @@ impl Studio {
                                 simple: self.simple_cables,
                                 selected: self.selected_block.as_deref(),
                                 positions: &self.block_positions,
+                                viewport: self.routing_viewport.clone(),
                             })
                             .width(Length::Fill)
                             .height(Length::Fill),

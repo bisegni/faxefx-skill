@@ -140,6 +140,7 @@ struct Studio {
     device_busy: bool,
     selected_block: Option<String>,
     block_positions: std::collections::BTreeMap<String, (f32, f32)>,
+    routing_viewport: std::sync::Arc<std::sync::Mutex<iced::Size>>,
     pending_parameters: std::collections::BTreeMap<(String, String), f64>,
     pending: Option<Pending>,
     save_dialog: bool,
@@ -258,6 +259,9 @@ impl Default for Studio {
             device_busy: false,
             selected_block: None,
             block_positions: Default::default(),
+            routing_viewport: std::sync::Arc::new(std::sync::Mutex::new(iced::Size::new(
+                680., 420.,
+            ))),
             pending_parameters: Default::default(),
             pending: None,
             save_dialog: false,
@@ -461,13 +465,15 @@ impl Studio {
             Message::SimpleCables(value) => self.simple_cables = value,
             Message::AutoLayout => {
                 if let Some(snapshot) = &self.snapshot {
-                    self.block_positions = routing::auto_layout(
-                        snapshot,
-                        iced::Size::new(
-                            (self.size.width * 0.74 - 80.).max(300.),
-                            (self.size.height * 0.68 - 180.).max(300.),
-                        ),
-                    );
+                    let viewport =
+                        self.routing_viewport
+                            .lock()
+                            .map(|size| *size)
+                            .unwrap_or(iced::Size::new(
+                                (self.size.width * 0.5 - 50.).max(300.),
+                                (self.size.height * 0.44 - 10.).max(300.),
+                            ));
+                    self.block_positions = routing::auto_layout(snapshot, viewport);
                 }
             }
             Message::FocusPane(p) => self.focused_pane = Some(p),

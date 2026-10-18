@@ -12,6 +12,7 @@ pub struct RoutingCanvas<'a> {
     pub simple: bool,
     pub selected: Option<&'a str>,
     pub positions: &'a BTreeMap<String, (f32, f32)>,
+    pub viewport: std::sync::Arc<std::sync::Mutex<Size>>,
 }
 pub struct RoutingState {
     drag: Option<(String, Point, Point)>,
@@ -265,6 +266,9 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
         bounds: Rectangle,
         _: iced::mouse::Cursor,
     ) -> Vec<Geometry> {
+        if let Ok(mut viewport) = self.viewport.lock() {
+            *viewport = bounds.size();
+        }
         let mut f = Frame::new(renderer, bounds.size());
         f.fill_rectangle(Point::ORIGIN, bounds.size(), iced::color!(0x090f13));
         // Fine matrix provides a routing coordinate system without competing with cables.
