@@ -138,6 +138,191 @@ fn icon(f: &mut Frame, family: &str, p: Point, color: Color) {
                 1.7,
             );
         }
+        "cab" | "ir-player" | "nam-player" => {
+            let cabinet = Path::rounded_rectangle(
+                Point::new(p.x - 9., p.y - 10.),
+                Size::new(18., 20.),
+                2.into(),
+            );
+            f.stroke(&cabinet, stroke);
+            f.stroke(&Path::circle(Point::new(p.x, p.y - 3.), 4.5), stroke);
+            f.stroke(&Path::circle(Point::new(p.x, p.y + 6.), 2.), stroke);
+        }
+        "drive" | "dynamic-distortion" | "ringmod" => {
+            let bolt = Path::new(|b| {
+                b.move_to(Point::new(p.x + 2., p.y - 11.));
+                b.line_to(Point::new(p.x - 7., p.y + 1.));
+                b.line_to(Point::new(p.x - 1., p.y + 1.));
+                b.line_to(Point::new(p.x - 3., p.y + 11.));
+                b.line_to(Point::new(p.x + 8., p.y - 3.));
+                b.line_to(Point::new(p.x + 2., p.y - 3.));
+                b.close();
+            });
+            f.stroke(&bolt, stroke);
+        }
+        "comp" | "multicomp" | "gate" => {
+            let envelope = Path::new(|b| {
+                b.move_to(Point::new(p.x - 11., p.y + 7.));
+                b.line_to(Point::new(p.x - 6., p.y + 7.));
+                b.line_to(Point::new(p.x - 3., p.y - 7.));
+                b.line_to(Point::new(p.x + 1., p.y - 7.));
+                b.line_to(Point::new(p.x + 4., p.y + 2.));
+                b.line_to(Point::new(p.x + 11., p.y + 2.));
+            });
+            f.stroke(&envelope, stroke);
+            line(
+                f,
+                Point::new(p.x - 10., p.y - 2.),
+                Point::new(p.x + 10., p.y - 2.),
+                color,
+                0.8,
+            );
+        }
+        "geq" | "peq" => {
+            for (x, y) in [(-7., -4.), (0., 3.), (7., -1.)] {
+                line(
+                    f,
+                    Point::new(p.x + x, p.y - 9.),
+                    Point::new(p.x + x, p.y + 9.),
+                    color,
+                    1.2,
+                );
+                f.fill(&Path::circle(Point::new(p.x + x, p.y + y), 2.2), color);
+            }
+        }
+        "delay" | "multitap" | "megatap" | "tentap" | "feedback-send" | "feedback-return" => {
+            for (x, r) in [(-6., 5.), (0., 3.5), (6., 2.)] {
+                f.stroke(&Path::circle(Point::new(p.x + x, p.y), r), stroke);
+            }
+            line(
+                f,
+                Point::new(p.x - 10., p.y + 8.),
+                Point::new(p.x + 10., p.y + 8.),
+                color,
+                1.,
+            );
+        }
+        "reverb" | "plex" | "resonator" => {
+            for r in [3., 6.5, 10.] {
+                f.stroke(&Path::circle(Point::new(p.x, p.y), r), stroke);
+            }
+            f.fill(&Path::circle(Point::new(p.x, p.y), 1.6), color);
+        }
+        "chorus" | "flanger" | "phaser" | "rotary" | "tremolo" => {
+            let wave = Path::new(|b| {
+                b.move_to(Point::new(p.x - 12., p.y));
+                b.line_to(Point::new(p.x - 9., p.y - 7.));
+                b.line_to(Point::new(p.x - 6., p.y));
+                b.line_to(Point::new(p.x - 3., p.y + 7.));
+                b.line_to(Point::new(p.x, p.y));
+                b.line_to(Point::new(p.x + 3., p.y - 7.));
+                b.line_to(Point::new(p.x + 6., p.y));
+                b.line_to(Point::new(p.x + 9., p.y + 7.));
+                b.line_to(Point::new(p.x + 12., p.y));
+            });
+            f.stroke(&wave, stroke);
+        }
+        "filter" | "wah" | "formant" => {
+            let curve = Path::new(|b| {
+                b.move_to(Point::new(p.x - 11., p.y + 7.));
+                b.line_to(Point::new(p.x - 6., p.y + 6.));
+                b.line_to(Point::new(p.x - 2., p.y - 7.));
+                b.line_to(Point::new(p.x + 2., p.y - 9.));
+                b.line_to(Point::new(p.x + 6., p.y + 5.));
+                b.line_to(Point::new(p.x + 11., p.y + 7.));
+            });
+            f.stroke(&curve, stroke);
+            line(
+                f,
+                Point::new(p.x - 11., p.y + 9.),
+                Point::new(p.x + 11., p.y + 9.),
+                color,
+                0.8,
+            );
+        }
+        "mixer" | "multiplexer" | "crossover" => {
+            let branches = Path::new(|b| {
+                b.move_to(Point::new(p.x - 11., p.y));
+                b.line_to(Point::new(p.x - 3., p.y));
+                b.move_to(Point::new(p.x - 3., p.y));
+                b.line_to(Point::new(p.x + 5., p.y - 8.));
+                b.move_to(Point::new(p.x - 3., p.y));
+                b.line_to(Point::new(p.x + 5., p.y + 8.));
+                b.move_to(Point::new(p.x + 5., p.y - 8.));
+                b.line_to(Point::new(p.x + 11., p.y - 8.));
+                b.move_to(Point::new(p.x + 5., p.y + 8.));
+                b.line_to(Point::new(p.x + 11., p.y + 8.));
+            });
+            f.stroke(&branches, stroke);
+            f.fill(&Path::circle(Point::new(p.x - 3., p.y), 2.), color);
+        }
+        "volume" | "enhancer" => {
+            for (x, y) in [(-6., 2.), (0., -4.), (6., 5.)] {
+                line(
+                    f,
+                    Point::new(p.x + x, p.y - 9.),
+                    Point::new(p.x + x, p.y + 9.),
+                    color,
+                    1.1,
+                );
+                f.fill(
+                    &Path::rounded_rectangle(
+                        Point::new(p.x + x - 2., p.y + y - 2.),
+                        Size::new(4., 4.),
+                        1.into(),
+                    ),
+                    color,
+                );
+            }
+        }
+        "pitch" | "synth" | "vocoder" | "tone-match" | "rta" | "tuner" => {
+            let meter = Path::rounded_rectangle(
+                Point::new(p.x - 11., p.y - 8.),
+                Size::new(22., 16.),
+                3.into(),
+            );
+            f.stroke(&meter, stroke);
+            let trace = Path::new(|b| {
+                b.move_to(Point::new(p.x - 8., p.y + 3.));
+                b.line_to(Point::new(p.x - 4., p.y + 3.));
+                b.line_to(Point::new(p.x - 1., p.y - 4.));
+                b.line_to(Point::new(p.x + 2., p.y + 4.));
+                b.line_to(Point::new(p.x + 5., p.y - 2.));
+                b.line_to(Point::new(p.x + 8., p.y - 2.));
+            });
+            f.stroke(&trace, stroke);
+        }
+        "looper" => {
+            f.stroke(&Path::circle(Point::new(p.x, p.y), 8.), stroke);
+            let arrow = Path::new(|b| {
+                b.move_to(Point::new(p.x + 3., p.y - 10.));
+                b.line_to(Point::new(p.x + 10., p.y - 9.));
+                b.line_to(Point::new(p.x + 8., p.y - 3.));
+            });
+            f.fill(&arrow, color);
+        }
+        "midiblock" | "footcontroller" | "preset-fc" | "perform" => {
+            let pedal = Path::rounded_rectangle(
+                Point::new(p.x - 10., p.y - 9.),
+                Size::new(20., 18.),
+                3.into(),
+            );
+            f.stroke(&pedal, stroke);
+            f.stroke(&Path::circle(Point::new(p.x, p.y + 3.), 3.), stroke);
+            for x in [-5., 0., 5.] {
+                f.fill(&Path::circle(Point::new(p.x + x, p.y - 5.), 0.9), color);
+            }
+        }
+        "ircapture" => {
+            let cabinet = Path::rounded_rectangle(
+                Point::new(p.x - 9., p.y - 9.),
+                Size::new(18., 18.),
+                2.into(),
+            );
+            f.stroke(&cabinet, stroke);
+            f.stroke(&Path::circle(Point::new(p.x, p.y), 5.), stroke);
+            f.fill(&Path::circle(Point::new(p.x, p.y), 1.5), color);
+        }
         "wire" | "shunt" => line(
             f,
             Point::new(p.x - 12., p.y),
@@ -145,13 +330,25 @@ fn icon(f: &mut Frame, family: &str, p: Point, color: Color) {
             color,
             1.7,
         ),
-        _ => f.fill_text(canvas::Text {
-            content: "?".into(),
-            position: Point::new(p.x - 5., p.y - 12.),
-            color,
-            size: 23.into(),
-            ..Default::default()
-        }),
+        _ => {
+            // Unknown blocks still get a neutral effect-module glyph; the family
+            // label carries identity, without implying unsupported semantics.
+            let module = Path::rounded_rectangle(
+                Point::new(p.x - 10., p.y - 8.),
+                Size::new(20., 16.),
+                3.into(),
+            );
+            f.stroke(&module, stroke);
+            for y in [-3., 2., 7.] {
+                line(
+                    f,
+                    Point::new(p.x - 5., p.y + y),
+                    Point::new(p.x + 5., p.y + y),
+                    color,
+                    1.2,
+                );
+            }
+        }
     }
 }
 impl canvas::Program<Message> for RoutingCanvas<'_> {
