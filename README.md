@@ -29,19 +29,19 @@ Hardware parameter editing and Restore are disabled. Hardware Save sends one
 user-operated store request after repeated context checks and durable journaling;
 persistence still requires manual verification on the device.
 
-See [native architecture and workflow](native/README.md),
-[capabilities](native/CAPABILITIES.md), [verification](native/VERIFICATION.md),
-[Mac acceptance checklist](native/MAC_HANDOFF.md), and
+See [native architecture and workflow](src/README.md),
+[capabilities](src/CAPABILITIES.md), [verification](src/VERIFICATION.md),
+[Mac acceptance checklist](src/MAC_HANDOFF.md), and
 [source boundaries](docs/PROVENANCE.md).
 
 ## Repository
 
 | Path | Purpose |
 | --- | --- |
-| `native/crates/` | Rust UI, backend, MIDI, agent adapters, persistence and audio |
-| `native/resources/` | App-scoped agent skill and static effect identities |
-| `native/audio-worker/` | Isolated audio measurement worker and its tests |
-| `native/tools/` | Native package build and integrity checks |
+| `src/crates/` | Rust UI, backend, MIDI, agent adapters, persistence and audio |
+| `src/resources/` | App-scoped agent skill and static effect identities |
+| `src/audio-worker/` | Isolated audio measurement worker and its tests |
+| `src/tools/` | Native package build and integrity checks |
 | `docs/` | Source boundaries and recovered device-protocol evidence |
 | `.github/workflows/native.yml` | Rust, worker and package CI |
 
@@ -62,15 +62,15 @@ developer environment:
 
 ```sh
 python3 -m venv .venv-native-audio
-.venv-native-audio/bin/python -m pip install -r native/audio-worker/requirements.txt pytest pyinstaller==6.20.0
-.venv-native-audio/bin/python -m pytest -q native/audio-worker
-.venv-native-audio/bin/python native/tools/package.py --candidate-tag local
+.venv-native-audio/bin/python -m pip install -r src/audio-worker/requirements.txt pytest pyinstaller==6.20.0
+.venv-native-audio/bin/python -m pytest -q src/audio-worker
+.venv-native-audio/bin/python src/tools/package.py --candidate-tag local
 ```
 
 On Windows, use `.venv-native-audio\Scripts\python.exe` for these developer commands.
 The packager prints the generated candidate directory. Verify it with
-`native/tools/check_package.py <candidate-directory>` using the same interpreter.
-CI uses `native/tools/ci_package.py` to prepare its isolated packaging environment.
+`src/tools/check_package.py <candidate-directory>` using the same interpreter.
+CI uses `src/tools/ci_package.py` to prepare its isolated packaging environment.
 End users receive a frozen worker and do not install Python or Node.js.
 Mac bundles receive an ad-hoc signature; Developer ID signing and notarization
 remain separate release steps. Verification never substitutes for hardware acceptance.
@@ -78,7 +78,7 @@ remain separate release steps. Verification never substitutes for hardware accep
 ## External Software
 
 Direct Rust dependencies and all transitive versions are resolved in
-[Cargo.lock](Cargo.lock); the manifests in `native/crates/` define required features.
+[Cargo.lock](Cargo.lock); the manifests in `src/crates/` define required features.
 
 | Software | Version / source | Purpose |
 | --- | --- | --- |
@@ -96,7 +96,7 @@ Direct Rust dependencies and all transitive versions are resolved in
 | sha2 | 0.10; [RustCrypto](https://github.com/RustCrypto/hashes) | Artifact integrity |
 | rodio | 0.21; [repository](https://github.com/RustAudio/rodio) | Local decoding and playback |
 | Python | 3.11 for developer packaging; [python.org](https://www.python.org/) | Isolated audio worker and package scripts |
-| NumPy / SciPy / SoundFile | 2.4.6 / 1.17.1 / 0.13.1; [NumPy](https://numpy.org/), [SciPy](https://scipy.org/), [SoundFile](https://python-soundfile.readthedocs.io/) | Worker measurements; pinned in `native/audio-worker/requirements.txt` |
+| NumPy / SciPy / SoundFile | 2.4.6 / 1.17.1 / 0.13.1; [NumPy](https://numpy.org/), [SciPy](https://scipy.org/), [SoundFile](https://python-soundfile.readthedocs.io/) | Worker measurements; pinned in `src/audio-worker/requirements.txt` |
 | PyInstaller | 6.20.0; [PyInstaller](https://pyinstaller.org/) | Freeze the worker and interpreter for distribution |
 | pytest | Developer test dependency; [pytest](https://docs.pytest.org/) | Worker tests |
 | Codex | App Server 0.163.x; [OpenAI Codex](https://github.com/openai/codex) | Optional authenticated provider runtime |

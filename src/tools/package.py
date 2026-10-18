@@ -35,7 +35,7 @@ def main():
             '--name', 'axe-audio-worker', '--distpath', str(root / 'dist/audio-core'),
             '--workpath', str(root / '.local/audio-core-pyinstaller'),
             '--specpath', str(root / '.local/audio-core-pyinstaller'),
-            str(root / 'native/audio-worker/worker.py'))
+            str(root / 'src/audio-worker/worker.py'))
         worker = root / 'dist/audio-core/axe-audio-worker'
     worker = worker.resolve()
     executable = 'axe-desktop.exe' if sys.platform == 'win32' else 'axe-desktop'
@@ -65,7 +65,7 @@ def main():
         resources.mkdir(parents=True)
     shutil.copy2(root / 'target' / profile / executable, binary_dir / executable)
     shutil.copytree(worker, resources / 'audio-worker/axe-audio-worker', symlinks=True)
-    shutil.copytree(root / 'native/resources/axefx-live', resources / 'axefx-live')
+    shutil.copytree(root / 'src/resources/axefx-live', resources / 'axefx-live')
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     dirty = subprocess.run(['git', 'diff', '--quiet', '--', 'native', 'Cargo.toml', 'Cargo.lock']).returncode != 0
     manifest = {'version': 1, 'commit': commit, 'implementation_dirty': dirty,
@@ -76,7 +76,7 @@ def main():
                 'python': platform.python_version(),
                 'files': {str(p.relative_to(app)): hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in sorted(app.rglob('*')) if p.is_file()}}
-    (resources / 'CAPABILITIES.md').write_text((root / 'native/CAPABILITIES.md').read_text())
+    (resources / 'CAPABILITIES.md').write_text((root / 'src/CAPABILITIES.md').read_text())
     if sys.platform == 'darwin':
         run('codesign', '--force', '--deep', '--sign', '-', str(app))
         run('codesign', '--verify', '--deep', '--strict', str(app))

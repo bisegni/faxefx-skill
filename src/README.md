@@ -48,8 +48,8 @@ Save persists a simulated destination and is not proof of device saving.
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo fmt --all --check
-python -m pytest -q native/audio-worker
-python native/tools/ci_package.py
+python -m pytest -q src/audio-worker
+python src/tools/ci_package.py
 ```
 
 The last commands are developer commands in an isolated environment. The package

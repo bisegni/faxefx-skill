@@ -5,12 +5,12 @@ app-scoped agent skill, static effect identities, local audio measurement worker
 and native package tooling. Workspace crates declare the MIT license in
 `Cargo.toml`. External dependencies are installed through Cargo and the isolated
 worker environment; their resolved versions appear in `Cargo.lock` and
-`native/audio-worker/requirements.txt`.
+`src/audio-worker/requirements.txt`.
 
-The static effect identities in `native/resources/axe-effects/identities.json`
+The static effect identities in `src/resources/axe-effects/identities.json`
 include their provenance. Static names and parameter IDs do not establish firmware
 compatibility, numeric units or write capabilities. The authored protocol fixtures
-in `native/crates/session/tests/fixtures/` are test inputs, not hardware acceptance.
+in `src/crates/session/tests/fixtures/` are test inputs, not hardware acceptance.
 TestMock values remain isolated simulations.
 
 The bundled audio worker performs local measurements over a private JSON-RPC

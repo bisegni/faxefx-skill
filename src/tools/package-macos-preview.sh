@@ -10,7 +10,7 @@ cargo build -p axe-desktop --release --locked
 app='dist/Axe Studio Development.app'
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/axefx-live"
 cp target/release/axe-desktop "$app/Contents/MacOS/axe-desktop"
-cp native/resources/axefx-live/SKILL.md "$app/Contents/Resources/axefx-live/SKILL.md"
+cp src/resources/axefx-live/SKILL.md "$app/Contents/Resources/axefx-live/SKILL.md"
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
