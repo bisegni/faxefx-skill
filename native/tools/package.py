@@ -19,6 +19,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--worker-dir', type=Path)
+    parser.add_argument('--candidate-tag', help='Build into a separate candidate directory without replacing the standard package')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     import os
@@ -40,7 +41,8 @@ def main():
     executable = 'axe-desktop.exe' if sys.platform == 'win32' else 'axe-desktop'
     if not worker.is_dir() or not (worker / ('axe-audio-worker.exe' if sys.platform == 'win32' else 'axe-audio-worker')).is_file():
         raise SystemExit('Frozen audio worker directory is missing')
-    stage = root / 'dist' / f'axe-studio-{sys.platform}-{platform.machine()}-{profile}'
+    suffix = f'-{args.candidate_tag}' if args.candidate_tag else ''
+    stage = root / 'dist' / f'axe-studio-{sys.platform}-{platform.machine()}-{profile}{suffix}'
     if stage.exists():
         # Remove only the generated staging tree, never user app data or legacy source.
         shutil.rmtree(stage)

@@ -40,3 +40,11 @@ Auto layout action recalculates positions using the available window dimensions;
 user drags continue to override individual computed positions. `cargo check -p
 axe-desktop --locked` passed after this change. Hardware connection hot-plug and
 visual layout at the user's exact viewport still need manual confirmation.
+
+## Connection-aware routing refinement
+
+Auto layout now collapses routing strongly connected components, assigns layers
+from the directed connection graph, and applies barycentric ordering to reduce
+cable crossings. Input blocks anchor at the left and output blocks at the right.
+Effect cards are smaller (up to 78×66 logical pixels) and size with the measured
+canvas viewport. Auto layout uses that same measured viewport after window resizing.

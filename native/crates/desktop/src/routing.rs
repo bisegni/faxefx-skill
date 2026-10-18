@@ -36,9 +36,17 @@ impl Default for RoutingState {
 }
 impl RoutingCanvas<'_> {
     fn geometry(&self, bounds: Rectangle) -> (f32, f32, impl Fn(&Block) -> Point + use<'_>) {
-        let width = 90_f32.min((bounds.width - 36.).max(54.) / 3.).max(62.);
-        let height = 88.;
         let automatic = auto_layout(self.snapshot, bounds.size());
+        let columns = automatic
+            .values()
+            .map(|(x, _)| x.to_bits())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            .max(1);
+        let width = ((bounds.width - 24. - (columns.saturating_sub(1) as f32 * 12.))
+            / columns as f32)
+            .clamp(44., 78.);
+        let height = auto_card_height(self.snapshot, bounds.size());
         (width, height, move |b: &Block| {
             let p = self
                 .positions
@@ -53,56 +61,244 @@ impl RoutingCanvas<'_> {
         })
     }
 }
-/// Arrange existing effects into non-overlapping viewport columns. Device grid
-/// order is preserved while adjacent source columns are compacted to available width.
+/// Assign each effect a graph layer so connections run from left to right.
 pub fn auto_layout(snapshot: &Snapshot, size: Size) -> BTreeMap<String, (f32, f32)> {
-    let count = snapshot.blocks.len();
-    if count == 0 {
+    let n = snapshot.blocks.len();
+    if n == 0 {
         return BTreeMap::new();
     }
-    let aspect = (size.width.max(1.) / size.height.max(1.)).clamp(0.5, 2.0);
-    let width = 90.0_f32.min(((size.width - 36.).max(54.) / 3.).max(62.));
-    let height = 88.0_f32;
-    let capacity_rows = ((size.height - 24.).max(height) / (height + 12.))
-        .floor()
-        .max(1.) as usize;
-    let required_columns = count.div_ceil(capacity_rows);
-    let visual_columns = (count as f32 * aspect).sqrt().round() as usize;
-    let columns = required_columns.max(visual_columns).clamp(1, count);
-    let mut ordered = snapshot.blocks.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|b| (b.position.0, b.position.1, b.id.as_str()));
-    let mut buckets = vec![Vec::new(); columns];
-    for (index, block) in ordered.into_iter().enumerate() {
-        let rank = index * columns / count;
-        buckets[rank].push(block);
-    }
-    let usable_w = (size.width - width - 24.).max(0.);
-    let usable_h = (size.height - height - 24.).max(0.);
-    let used_columns = buckets
+    let ids = snapshot
+        .blocks
         .iter()
-        .rposition(|b| !b.is_empty())
-        .map_or(1, |i| i + 1);
-    let mut result = BTreeMap::new();
-    for (col, blocks) in buckets.iter_mut().enumerate() {
-        blocks.sort_by_key(|b| (b.position.1, b.id.as_str()));
-        if blocks.is_empty() {
-            continue;
+        .enumerate()
+        .map(|(i, b)| (b.id.as_str(), i))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut adjacency = vec![Vec::new(); n];
+    for (from, to) in &snapshot.edges {
+        if let (Some(&a), Some(&b)) = (ids.get(from.as_str()), ids.get(to.as_str())) {
+            adjacency[a].push(b);
         }
-        let x = if used_columns <= 1 {
-            12. + usable_w / 2.
+    }
+    let mut tarjan = Tarjan::new(&adjacency);
+    for v in 0..n {
+        if tarjan.indices[v].is_none() {
+            tarjan.visit(v);
+        }
+    }
+    let components = tarjan.components;
+    let mut component_of = vec![0; n];
+    for (c, nodes) in components.iter().enumerate() {
+        for &v in nodes {
+            component_of[v] = c;
+        }
+    }
+    let mut outgoing = vec![std::collections::BTreeSet::new(); components.len()];
+    let mut indegree = vec![0usize; components.len()];
+    for v in 0..n {
+        for &to in &adjacency[v] {
+            let (a, b) = (component_of[v], component_of[to]);
+            if a != b && outgoing[a].insert(b) {
+                indegree[b] += 1;
+            }
+        }
+    }
+    let mut queue = std::collections::VecDeque::new();
+    for (c, &d) in indegree.iter().enumerate() {
+        if d == 0 {
+            queue.push_back(c);
+        }
+    }
+    let mut component_rank = vec![0usize; components.len()];
+    while let Some(c) = queue.pop_front() {
+        for &to in &outgoing[c] {
+            component_rank[to] = component_rank[to].max(component_rank[c] + 1);
+            indegree[to] -= 1;
+            if indegree[to] == 0 {
+                queue.push_back(to);
+            }
+        }
+    }
+    let mut max_rank = component_rank.iter().copied().max().unwrap_or(0);
+    for (index, block) in snapshot.blocks.iter().enumerate() {
+        if block.family == "output" {
+            max_rank = max_rank.max(component_rank[component_of[index]]);
+        }
+    }
+    for (index, block) in snapshot.blocks.iter().enumerate() {
+        if block.family == "input" {
+            component_rank[component_of[index]] = 0;
+        }
+        if block.family == "output" {
+            component_rank[component_of[index]] = max_rank;
+        }
+    }
+    let usable_w = (size.width - 24.).max(1.);
+    let min_width = 46.;
+    let max_columns = ((usable_w + 12.) / (min_width + 12.)).floor().max(1.) as usize;
+    let columns = (max_rank + 1).min(max_columns).max(1);
+    let display_rank = |rank: usize| {
+        if max_rank + 1 <= columns {
+            rank
         } else {
-            12. + col as f32 * usable_w / (used_columns - 1) as f32
+            rank * (columns - 1) / max_rank.max(1)
+        }
+    };
+    let mut layers = vec![Vec::new(); columns];
+    for (c, nodes) in components.iter().enumerate() {
+        let layer = display_rank(component_rank[c]);
+        layers[layer].extend(nodes.iter().copied());
+    }
+    for layer in &mut layers {
+        layer.sort_by_key(|&i| {
+            (
+                snapshot.blocks[i].position.1,
+                snapshot.blocks[i].position.0,
+                snapshot.blocks[i].id.as_str(),
+            )
+        });
+    }
+    // Repeated barycentric sweeps keep connected blocks near their neighbors.
+    for _ in 0..4 {
+        for l in 1..layers.len() {
+            let mut order = vec![0f32; n];
+            for (i, layer) in layers.iter().enumerate() {
+                for (p, &v) in layer.iter().enumerate() {
+                    order[v] = p as f32;
+                }
+                if i == l {
+                    break;
+                }
+            }
+            layers[l].sort_by(|&a, &b| {
+                let score = |v: usize| {
+                    let parents = adjacency
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(p, outs)| outs.contains(&v).then_some(order[p]))
+                        .collect::<Vec<_>>();
+                    if parents.is_empty() {
+                        snapshot.blocks[v].position.1 as f32
+                    } else {
+                        parents.iter().sum::<f32>() / parents.len() as f32
+                    }
+                };
+                score(a)
+                    .total_cmp(&score(b))
+                    .then_with(|| snapshot.blocks[a].id.cmp(&snapshot.blocks[b].id))
+            });
+        }
+        for l in (0..layers.len().saturating_sub(1)).rev() {
+            let mut order = vec![0f32; n];
+            for (i, layer) in layers.iter().enumerate().rev() {
+                for (p, &v) in layer.iter().enumerate() {
+                    order[v] = p as f32;
+                }
+                if i == l {
+                    break;
+                }
+            }
+            layers[l].sort_by(|&a, &b| {
+                let score = |v: usize| {
+                    let children = adjacency[v].iter().map(|&to| order[to]).collect::<Vec<_>>();
+                    if children.is_empty() {
+                        snapshot.blocks[v].position.1 as f32
+                    } else {
+                        children.iter().sum::<f32>() / children.len() as f32
+                    }
+                };
+                score(a)
+                    .total_cmp(&score(b))
+                    .then_with(|| snapshot.blocks[a].id.cmp(&snapshot.blocks[b].id))
+            });
+        }
+    }
+    let max_rows = layers.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    let usable_h = (size.height - 24.).max(1.);
+    let height = (usable_h - 10. * (max_rows.saturating_sub(1) as f32)) / max_rows as f32;
+    let height = height.clamp(42., 66.);
+    let width = ((usable_w - 12. * (columns.saturating_sub(1) as f32)) / columns as f32)
+        .clamp(min_width, 78.);
+    let mut result = BTreeMap::new();
+    for (col, layer) in layers.iter().enumerate() {
+        let x = if columns == 1 {
+            12. + (usable_w - width) / 2.
+        } else {
+            12. + col as f32 * (usable_w - width) / (columns - 1) as f32
         };
-        for (row, block) in blocks.iter().enumerate() {
-            let y = if blocks.len() <= 1 {
-                12. + usable_h / 2.
+        let free = (usable_h - height).max(0.);
+        for (row, &index) in layer.iter().enumerate() {
+            let y = if layer.len() <= 1 {
+                12. + free / 2.
             } else {
-                12. + row as f32 * usable_h / (blocks.len() - 1) as f32
+                12. + row as f32 * free / (layer.len() - 1) as f32
             };
-            result.insert(block.id.clone(), (x, y));
+            result.insert(snapshot.blocks[index].id.clone(), (x, y));
         }
     }
     result
+}
+
+fn auto_card_height(snapshot: &Snapshot, size: Size) -> f32 {
+    let positions = auto_layout(snapshot, size);
+    let mut counts = std::collections::BTreeMap::<u32, usize>::new();
+    for (x, _) in positions.values() {
+        *counts.entry(x.to_bits()).or_default() += 1;
+    }
+    let rows = counts.values().copied().max().unwrap_or(1).max(1);
+    let usable = (size.height - 24.).max(1.);
+    ((usable - 10. * (rows.saturating_sub(1) as f32)) / rows as f32).clamp(42., 66.)
+}
+
+struct Tarjan<'a> {
+    adjacency: &'a [Vec<usize>],
+    indices: Vec<Option<usize>>,
+    low: Vec<usize>,
+    stack: Vec<usize>,
+    on_stack: Vec<bool>,
+    components: Vec<Vec<usize>>,
+    next: usize,
+}
+impl<'a> Tarjan<'a> {
+    fn new(adjacency: &'a [Vec<usize>]) -> Self {
+        let n = adjacency.len();
+        Self {
+            adjacency,
+            indices: vec![None; n],
+            low: vec![0; n],
+            stack: Vec::new(),
+            on_stack: vec![false; n],
+            components: Vec::new(),
+            next: 0,
+        }
+    }
+    fn visit(&mut self, v: usize) {
+        let index = self.next;
+        self.next += 1;
+        self.indices[v] = Some(index);
+        self.low[v] = index;
+        self.stack.push(v);
+        self.on_stack[v] = true;
+        for &to in &self.adjacency[v] {
+            if self.indices[to].is_none() {
+                self.visit(to);
+                self.low[v] = self.low[v].min(self.low[to]);
+            } else if self.on_stack[to] {
+                self.low[v] = self.low[v].min(self.indices[to].unwrap());
+            }
+        }
+        if self.low[v] == index {
+            let mut component = Vec::new();
+            loop {
+                let node = self.stack.pop().unwrap();
+                self.on_stack[node] = false;
+                component.push(node);
+                if node == v {
+                    break;
+                }
+            }
+            self.components.push(component);
+        }
+    }
 }
 
 fn line(f: &mut Frame, a: Point, b: Point, color: Color, width: f32) {
@@ -401,25 +597,39 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
             icon(
                 &mut f,
                 &b.family,
-                Point::new(p.x + width / 2., p.y + 29.),
+                Point::new(p.x + width / 2., p.y + height * 0.31),
                 material.accent,
             );
             f.fill_text(canvas::Text {
-                content: if b.label.chars().count() > 11 {
-                    format!("{}…", b.label.chars().take(9).collect::<String>())
+                content: if b.label.chars().count()
+                    > ((width / 7.).floor() as usize).saturating_sub(2)
+                {
+                    format!(
+                        "{}…",
+                        b.label
+                            .chars()
+                            .take(((width / 7.).floor() as usize).saturating_sub(3).max(3))
+                            .collect::<String>()
+                    )
                 } else {
                     b.label.clone()
                 },
-                position: Point::new(p.x + 12., p.y + 54.),
+                position: Point::new(p.x + 6., p.y + height * 0.64),
                 color: style::TEXT,
-                size: 12.into(),
+                size: 10.into(),
                 ..Default::default()
             });
             f.fill_text(canvas::Text {
-                content: b.id.chars().take(14).collect(),
-                position: Point::new(p.x + 12., p.y + 75.),
+                content: b
+                    .id
+                    .strip_prefix("cell-")
+                    .unwrap_or(&b.id)
+                    .chars()
+                    .take(8)
+                    .collect(),
+                position: Point::new(p.x + 6., p.y + height * 0.84),
                 color: style::MUTED,
-                size: 10.into(),
+                size: 8.into(),
                 ..Default::default()
             });
             for x in [p.x, p.x + width] {
