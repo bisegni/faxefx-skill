@@ -3,11 +3,12 @@
 Rust owns UI, MIDI, scoped agent tools, transactions, persistence, artifacts and
 playback. The bundled Python worker performs local measurements only.
 
-- USB: fixed read-only routing/scene/status and eight active-amp getters (six
-  numeric controls plus device-provided model and level text). Recognized block
-  instance IDs show a type and compact name. Other parameter schemas remain
-  unavailable; unknown effects/parameters are never guessed. Raw amp float bits
-  are retained.
+- USB: fixed read-only routing/scene/status plus catalogued parameter getters
+  for recognized block instances. The bundled static Axe-Edit 1.15.00 catalog
+  names 174 block instances and 42 parameter families. Eight amp getters have
+  verified semantics; other getter replies are preserved as raw device values
+  and remain unverified until physical testing. Static metadata firmware match
+  is unknown. Unknown effects/parameters are never guessed.
 - Test mock: serialized parameter batches with originals, readback, rollback,
   cancellation, Restore original and explicitly selected simulated Save destination.
 - Codex: App Server 0.163.x, explicit bundled skill, isolated tools and streamed chat.

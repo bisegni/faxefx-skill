@@ -111,6 +111,14 @@ pub fn amp_getter(effect: u16, parameter: u16) -> Result<Vec<u8>, String> {
     if !(58..=61).contains(&effect) || ![0, 1, 2, 3, 4, 5, 20, 21].contains(&parameter) {
         return Err("Unsupported amp getter".into());
     }
+    parameter_getter(effect, parameter)
+}
+/// Construct only the read-only parameter getter. Callers must obtain effect
+/// and parameter IDs from the bundled static catalog; this emits no writes.
+pub fn parameter_getter(effect: u16, parameter: u16) -> Result<Vec<u8>, String> {
+    if effect > 0x3fff || parameter > 0x3fff {
+        return Err("Parameter getter ID exceeds the verified 14-bit fields".into());
+    }
     let mut p = vec![0; 15];
     p[0] = 0x1a;
     p[2] = (effect & 127) as u8;
@@ -118,6 +126,36 @@ pub fn amp_getter(effect: u16, parameter: u16) -> Result<Vec<u8>, String> {
     p[4] = (parameter & 127) as u8;
     p[5] = (parameter >> 7) as u8;
     frame(1, &p)
+}
+/// Decode a matching read-only reply without assuming device units or ranges.
+pub fn parameter_readback(
+    bytes: &[u8],
+    effect: u16,
+    parameter: u16,
+) -> Result<(u32, f64, String), String> {
+    let (op, p) = unframe(bytes)?;
+    let request = parameter_getter(effect, parameter)?;
+    let (_, expected) = unframe(&request)?;
+    if op != 1 || p.len() < 15 || p[..6] != expected[..6] || p[11..13] != [0, 0] || p[10] > 15 {
+        return Err("Parameter getter reply mismatch".into());
+    }
+    let bits = p[6..11]
+        .iter()
+        .enumerate()
+        .fold(0_u64, |a, (i, b)| a | ((*b as u64) << (7 * i))) as u32;
+    let raw = f32::from_bits(bits) as f64;
+    if !raw.is_finite() {
+        return Err("Parameter reply contains a non-finite value".into());
+    }
+    let length = p[13] as usize + ((p[14] as usize) << 7);
+    if length > 4096 {
+        return Err("Parameter display text exceeds the read limit".into());
+    }
+    let data = unpack(&p[15..], length)?;
+    let display = String::from_utf8_lossy(data.split(|b| *b == 0).next().unwrap_or_default())
+        .trim()
+        .to_string();
+    Ok((bits, raw, display))
 }
 pub fn amp_value(bytes: &[u8], effect: u16, parameter: u16) -> Result<(u32, f64), String> {
     let (bits, value, _) = amp_readback(bytes, effect, parameter)?;
@@ -130,23 +168,8 @@ pub fn amp_readback(
     effect: u16,
     parameter: u16,
 ) -> Result<(u32, Option<f64>, String), String> {
-    let (op, p) = unframe(bytes)?;
-    let request = amp_getter(effect, parameter)?;
-    let (_, expected) = unframe(&request)?;
-    if op != 1 || p.len() < 15 || p[..6] != expected[..6] || p[11..13] != [0, 0] || p[10] > 15 {
-        return Err("Amp getter reply mismatch".into());
-    }
-    let bits = p[6..11]
-        .iter()
-        .enumerate()
-        .fold(0_u64, |a, (i, b)| a | ((*b as u64) << (7 * i))) as u32;
-    let raw = f32::from_bits(bits) as f64;
-    let length = p[13] as usize + ((p[14] as usize) << 7);
-    let data = unpack(&p[15..], length)?;
-    let display = String::from_utf8_lossy(data.split(|b| *b == 0).next().unwrap_or_default())
-        .trim()
-        .to_string();
-    if !raw.is_finite() || display.is_empty() {
+    let (bits, raw, display) = parameter_readback(bytes, effect, parameter)?;
+    if display.is_empty() {
         return Err("Amp getter returned an invalid value".into());
     }
     if [1, 2, 3, 4, 5, 20].contains(&parameter) {

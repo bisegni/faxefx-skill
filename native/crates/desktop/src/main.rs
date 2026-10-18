@@ -426,7 +426,8 @@ impl Studio {
                     self.epoch += 1;
                     let epoch = self.epoch;
                     self.snapshot = None;
-                    self.status = "Reading device routing (read-only)…".into();
+                    self.status =
+                        "Reading routing and catalogued block parameters (read-only)…".into();
                     return iced::Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || {
@@ -448,8 +449,15 @@ impl Studio {
                 self.busy = false;
                 match result {
                     Ok(snapshot) => {
+                        let parameter_count: usize = snapshot
+                            .blocks
+                            .iter()
+                            .map(|block| block.parameters.len())
+                            .sum();
                         self.snapshot = Some(snapshot);
-                        self.status="USB routing read. Effect IDs preserved; unknown parameters stay unavailable. Choose a provider.".into();
+                        self.status = format!(
+                            "USB routing and {parameter_count} catalogued parameter rows captured read-only. Choose a provider."
+                        );
                         return self.bind_runtime();
                     }
                     Err(e) => {

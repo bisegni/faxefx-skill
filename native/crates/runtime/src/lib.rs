@@ -97,7 +97,7 @@ impl Backend {
             .is_some_and(Session::recovery_required)
     }
     pub fn capabilities(&self) -> Value {
-        json!({"target":self.snapshot.as_ref().map(|s|s.context.target),"parameter_batches":self.session.is_some()&&!self.recovery(),"restore_original":self.session.is_some()&&!self.recovery(),"save_tone":self.session.is_some()&&!self.recovery(),"structural_routing":false,"hardware_writes":false,"hardware_save_reason":"Device setter profiles, modifier protection, backup and save/reload have not passed hardware verification","parameter_baseline_is_full_backup":false})
+        json!({"target":self.snapshot.as_ref().map(|s|s.context.target),"parameter_batches":self.session.is_some()&&!self.recovery(),"restore_original":self.session.is_some()&&!self.recovery(),"save_tone":self.session.is_some()&&!self.recovery(),"structural_routing":false,"hardware_writes":false,"hardware_save_reason":"Device setter profiles, modifier protection, backup and save/reload have not passed hardware verification","parameter_baseline_is_full_backup":false,"parameter_catalog":axe_session::usb::catalog_info()})
     }
     pub fn adjust(
         &mut self,
@@ -183,7 +183,7 @@ impl Backend {
         }
         match call.name.as_str() {
             "session_inspect" => Ok(
-                json!({"snapshot":self.snapshot,"capabilities":self.capabilities(),"attached_analysis":self.attached}),
+                json!({"snapshot":self.snapshot,"capabilities":self.capabilities(),"parameter_catalog":axe_session::usb::catalog_info(),"attached_analysis":self.attached}),
             ),
             "block_inspect" => {
                 let id = call.arguments["block"]

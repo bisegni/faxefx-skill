@@ -33,6 +33,13 @@ pub struct Parameter {
     /// Device-provided textual value for parameters such as amp model names.
     #[serde(default)]
     pub display_text: Option<String>,
+    /// Unconverted float returned by the device; never an editable value by itself.
+    #[serde(default)]
+    pub raw_numeric: Option<f64>,
+    #[serde(default)]
+    pub read_status: Option<String>,
+    #[serde(default)]
+    pub read_error: Option<String>,
     pub range: Option<(f64, f64)>,
     pub writable: bool,
     pub automated: Option<bool>,
@@ -70,6 +77,13 @@ pub struct Block {
     /// Axe-Fx grid instance identifier. This is not a model identifier.
     #[serde(default)]
     pub instance_id: Option<u16>,
+    /// Static editor-symbol prefix used to enumerate known parameters.
+    #[serde(default)]
+    pub parameter_prefix: Option<String>,
+    #[serde(default)]
+    pub channel: Option<u8>,
+    #[serde(default)]
+    pub bypassed: Option<bool>,
     pub label: String,
     pub position: (u8, u8),
     pub parameters: Vec<Parameter>,
@@ -121,6 +135,9 @@ mod tests {
             unit: "".into(),
             confirmed: None,
             display_text: None,
+            raw_numeric: None,
+            read_status: None,
+            read_error: None,
             range: Some((0., 10.)),
             writable: true,
             automated: Some(false),

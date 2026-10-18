@@ -131,7 +131,7 @@ impl Studio {
                                 badge(
                                     self.snapshot
                                         .as_ref()
-                                        .and_then(|s| s.context.channel)
+                                        .and_then(|s| b.channel.or(s.context.channel))
                                         .map(|v| ((b'A' + v) as char).to_string())
                                         .unwrap_or("Unknown".into()),
                                     style::BLUE
@@ -193,7 +193,16 @@ impl Studio {
                                         p.confirmed
                                             .map(|v| format!("{v:.1}"))
                                             .or_else(|| p.display_text.clone())
-                                            .unwrap_or("Not read".into())
+                                            .or_else(|| {
+                                                p.raw_numeric.map(|v| format!("Raw {v:.5}"))
+                                            })
+                                            .unwrap_or_else(|| {
+                                                if p.read_error.is_some() {
+                                                    "Read failed".into()
+                                                } else {
+                                                    "Unavailable".into()
+                                                }
+                                            })
                                     )
                                     .size(12)
                                 )
@@ -202,6 +211,18 @@ impl Studio {
                             ]
                             .spacing(10)
                             .align_y(iced::Center),
+                        );
+                        body = body.push(
+                            text(format!(
+                                "{}{}",
+                                p.read_status.as_deref().unwrap_or("status unknown"),
+                                p.read_error
+                                    .as_deref()
+                                    .map(|error| format!(" · {error}"))
+                                    .unwrap_or_default()
+                            ))
+                            .size(9)
+                            .color(style::MUTED),
                         );
                         if let (Some(value), Some((min, max))) = (p.confirmed, p.range)
                             && self
@@ -238,11 +259,14 @@ impl Studio {
                         }
                     }
                     if b.parameters.is_empty() {
-                        body = body.push(label(if b.type_name.is_some() {
-                            "No live parameter list is verified for this block type yet."
+                        body = body.push(label(if b.parameter_prefix.is_some() {
+                            "No parameter identifiers are available in the bundled static catalog."
                         } else {
                             "The device block type is unknown; parameters are not guessed."
                         }));
+                    }
+                    if b.parameter_prefix.is_some() {
+                        body = body.push(text("Names come from static Axe-Edit metadata. Device firmware match is unknown; non-amp readbacks are unverified raw device values.").size(10).color(style::MUTED));
                     }
                     body = body.push(iced::widget::rule::horizontal(1)).push(label(
                         if self
