@@ -10,7 +10,7 @@ Open `Axe Studio.app`; it bundles the audio interpreter and dependencies.
 
 1. Launch without a terminal or system Python. Confirm the native window appears
    before discovery; USB failure must not silently choose mock.
-2. Explicitly choose Test mock. Verify all five panes, resize/drag/swap them, save
+2. Start the app before powering on the Axe-Fx. Confirm endpoint discovery finds it after power-on; use Retry if needed. In Test mock, use Auto layout, resize the window and run Auto layout again. Verify all five panes, drag/swap them, save
    and reload a named layout, reset, and check 1280×850 plus your display scales.
 3. Select Codex, verify explicit skill initialization, send a tonal direction,
    inspect streaming/tool activity and stop mid-turn. Confirm no later mutation

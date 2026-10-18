@@ -30,3 +30,13 @@ until protocol/capability and verified-backup gates pass; manual testing cannot
 exercise unsupported functions in this candidate. Optional guitar separation and
 model download management remain unimplemented. No automated or mock result is
 hardware acceptance. Legacy code and main history are preserved.
+
+## Routing and connection follow-up
+
+The current follow-up adds recurring endpoint discovery while no device snapshot is
+loaded, recognizes Fractal Audio/Axe-Fx MIDI port naming variants, and fits the
+initial block presentation to the routing pane viewport. The routing toolbar's
+Auto layout action recalculates positions using the available window dimensions;
+user drags continue to override individual computed positions. `cargo check -p
+axe-desktop --locked` passed after this change. Hardware connection hot-plug and
+visual layout at the user's exact viewport still need manual confirmation.

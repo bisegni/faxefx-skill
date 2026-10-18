@@ -35,46 +35,69 @@ impl Default for RoutingState {
 }
 impl RoutingCanvas<'_> {
     fn geometry(&self, bounds: Rectangle) -> (f32, f32, impl Fn(&Block) -> Point + use<'_>) {
-        let max_col = self
-            .snapshot
-            .blocks
-            .iter()
-            .map(|b| b.position.0)
-            .max()
-            .unwrap_or(4)
-            .max(4) as f32;
-        let max_row = self
-            .snapshot
-            .blocks
-            .iter()
-            .map(|b| b.position.1)
-            .max()
-            .unwrap_or(0) as f32;
-        let width = 90_f32.min((bounds.width - 40.).max(90.) / 3.);
-        let height = 96.;
+        let width = 90_f32.min((bounds.width - 36.).max(54.) / 3.).max(62.);
+        let height = 88.;
+        let automatic = auto_layout(self.snapshot, bounds.size());
         (width, height, move |b: &Block| {
             let p = self
                 .positions
                 .get(&b.id)
-                .map(|(x, y)| Point::new(*x, *y))
-                .unwrap_or_else(|| {
-                    Point::new(
-                        18. + b.position.0 as f32 / max_col * (bounds.width - width - 36.).max(0.),
-                        if max_row == 0. {
-                            (bounds.height * 0.46 - height / 2.).max(18.)
-                        } else {
-                            40. + b.position.1 as f32 / max_row
-                                * (bounds.height - height - 100.).max(0.)
-                        },
-                    )
-                });
+                .copied()
+                .or_else(|| automatic.get(&b.id).copied())
+                .unwrap_or((8., 8.));
             Point::new(
-                p.x.clamp(8., (bounds.width - width - 8.).max(8.)),
-                p.y.clamp(8., (bounds.height - height - 8.).max(8.)),
+                p.0.clamp(8., (bounds.width - width - 8.).max(8.)),
+                p.1.clamp(8., (bounds.height - height - 8.).max(8.)),
             )
         })
     }
 }
+/// Arrange existing effects into non-overlapping viewport columns. Device grid
+/// order is preserved while adjacent source columns are compacted to available width.
+pub fn auto_layout(snapshot: &Snapshot, size: Size) -> BTreeMap<String, (f32, f32)> {
+    let count = snapshot.blocks.len();
+    if count == 0 {
+        return BTreeMap::new();
+    }
+    let aspect = (size.width.max(1.) / size.height.max(1.)).clamp(0.5, 2.0);
+    let columns = ((count as f32 * aspect).sqrt().round() as usize).clamp(1, count);
+    let width = 90.0_f32.min(((size.width - 36.).max(54.) / 3.).max(62.));
+    let height = 88.0_f32;
+    let mut ordered = snapshot.blocks.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|b| (b.position.0, b.position.1, b.id.as_str()));
+    let min_col = ordered.first().map(|b| b.position.0).unwrap_or(0);
+    let max_col = ordered.last().map(|b| b.position.0).unwrap_or(min_col);
+    let span = usize::from(max_col.saturating_sub(min_col)).max(1);
+    let mut buckets = vec![Vec::new(); columns];
+    for block in ordered {
+        let rank = usize::from(block.position.0.saturating_sub(min_col)) * (columns - 1) / span;
+        buckets[rank].push(block);
+    }
+    let usable_w = (size.width - width - 24.).max(0.);
+    let usable_h = (size.height - height - 24.).max(0.);
+    let used_columns = buckets
+        .iter()
+        .rposition(|b| !b.is_empty())
+        .map_or(1, |i| i + 1);
+    let mut result = BTreeMap::new();
+    for (col, blocks) in buckets.iter_mut().enumerate() {
+        blocks.sort_by_key(|b| (b.position.1, b.id.as_str()));
+        if blocks.is_empty() {
+            continue;
+        }
+        let x = if used_columns <= 1 {
+            12. + usable_w / 2.
+        } else {
+            12. + col as f32 * usable_w / (used_columns - 1) as f32
+        };
+        for (row, block) in blocks.iter().enumerate() {
+            let y = 12. + (row + 1) as f32 * usable_h / (blocks.len() + 1) as f32;
+            result.insert(block.id.clone(), (x, y));
+        }
+    }
+    result
+}
+
 fn line(f: &mut Frame, a: Point, b: Point, color: Color, width: f32) {
     f.stroke(
         &Path::line(a, b),

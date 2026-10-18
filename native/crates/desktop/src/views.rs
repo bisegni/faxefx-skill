@@ -248,6 +248,10 @@ impl Studio {
                             style::MUTED
                         ),
                         space::horizontal(),
+                        control(
+                            "Auto layout",
+                            self.snapshot.as_ref().map(|_| Message::AutoLayout)
+                        ),
                         iced::widget::checkbox(self.simple_cables)
                             .label("Simple cables")
                             .text_size(11)

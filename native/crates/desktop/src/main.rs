@@ -79,6 +79,8 @@ enum Message {
     ViewAnalysis(String),
     CompareAudio,
     Retry,
+    DiscoveryTick,
+    AutoLayout,
     Choose(axe_agents::Provider),
     Drag(pane_grid::DragEvent),
     Resize(pane_grid::ResizeEvent),
@@ -333,6 +335,12 @@ impl Studio {
                     return self.bind_runtime();
                 }
             }
+            Message::DiscoveryTick => {
+                if self.snapshot.is_none() && !self.busy && self.backend.is_some() {
+                    self.busy = true;
+                    return Self::discover();
+                }
+            }
             Message::Retry => {
                 if self.dirty || self.recovery {
                     self.pending = Some(Pending::Capture);
@@ -355,13 +363,27 @@ impl Studio {
                         let inputs = ports
                             .inputs
                             .iter()
-                            .filter(|n| n.to_lowercase().contains("axe-fx"))
+                            .filter(|n| {
+                                let name: String = n
+                                    .to_lowercase()
+                                    .chars()
+                                    .filter(char::is_ascii_alphanumeric)
+                                    .collect();
+                                name.contains("axefx") || name.contains("fractalaudio")
+                            })
                             .cloned()
                             .collect::<Vec<_>>();
                         let outputs = ports
                             .outputs
                             .iter()
-                            .filter(|n| n.to_lowercase().contains("axe-fx"))
+                            .filter(|n| {
+                                let name: String = n
+                                    .to_lowercase()
+                                    .chars()
+                                    .filter(char::is_ascii_alphanumeric)
+                                    .collect();
+                                name.contains("axefx") || name.contains("fractalaudio")
+                            })
                             .cloned()
                             .collect::<Vec<_>>();
                         self.endpoints = Some(ports);
@@ -437,6 +459,17 @@ impl Studio {
             }
             Message::Resize(e) => self.panes.resize(e.split, e.ratio.clamp(0.2, 0.8)),
             Message::SimpleCables(value) => self.simple_cables = value,
+            Message::AutoLayout => {
+                if let Some(snapshot) = &self.snapshot {
+                    self.block_positions = routing::auto_layout(
+                        snapshot,
+                        iced::Size::new(
+                            (self.size.width * 0.74 - 80.).max(300.),
+                            (self.size.height * 0.68 - 180.).max(300.),
+                        ),
+                    );
+                }
+            }
             Message::FocusPane(p) => self.focused_pane = Some(p),
             Message::SwapPane(direction) => {
                 if let Some(p) = self
@@ -525,7 +558,7 @@ fn main() -> iced::Result {
         .title("Axe Studio · development")
         .theme(style::theme())
         .subscription(|s| {
-            iced::Subscription::batch([
+            let mut subscriptions = vec![
                 iced::event::listen().map(|e| {
                     if matches!(e, iced::Event::Window(iced::window::Event::CloseRequested)) {
                         Message::RequestClose
@@ -535,7 +568,14 @@ fn main() -> iced::Result {
                 }),
                 s.agent_subscription(),
                 s.audio_subscription(),
-            ])
+            ];
+            if s.snapshot.is_none() && !s.busy && s.backend.is_some() {
+                subscriptions.push(
+                    iced::time::every(std::time::Duration::from_secs(2))
+                        .map(|_| Message::DiscoveryTick),
+                );
+            }
+            iced::Subscription::batch(subscriptions)
         })
         .window(iced::window::Settings {
             size: iced::Size::new(1440., 960.),
