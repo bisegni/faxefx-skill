@@ -2,6 +2,7 @@
 """Verify the generated package manifest and absence of legacy runtime modules."""
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -22,4 +23,16 @@ for name in archive.toc:
         modules = archive.open_embedded_archive(name).toc
         if any(name.startswith('axefx_cli') for name in modules):
             raise SystemExit('Legacy application imported into frozen worker')
+request = json.dumps({
+    'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
+    'params': {'protocol_version': 1},
+}) + '\n'
+try:
+    result = subprocess.run([str(worker)], input=request, text=True,
+                            capture_output=True, timeout=15, check=True)
+    reply = json.loads(result.stdout.splitlines()[0])
+except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
+    raise SystemExit(f'Packaged audio worker failed its startup check: {error}')
+if reply.get('id') != 1 or reply.get('result', {}).get('protocol_version') != 1:
+    raise SystemExit('Packaged audio worker protocol startup check failed')
 print(f"Verified {len(manifest['files'])} packaged file hashes and standalone audio module boundary")

@@ -24,8 +24,10 @@ read-only app tool and verifies its version before chat is enabled.
   revocable per-turn tools, scoped authenticated loopback MCP and interruption.
 - `axe-runtime`: one in-process authority for UI and agent commands, durable chat,
   provider sessions and explicit analysis attachments; exclusive application lock.
-- `axe-audio`: content-addressed bounded imports, decoding, waveform, excerpt
-  matching, playback and supervised frozen-worker jobs.
+- `axe-audio`: user-started system-input capture, content-addressed bounded
+  imports, decoding, waveform, excerpt matching, playback and supervised
+  frozen-worker jobs. Raw recordings stay local; only attached summaries reach
+  the assistant.
 - `axe-desktop`: five dockable/resizable panes, named layouts, effect registry,
   generic unknown effects, damped cables, chat, audio and Save/Restore controls.
 

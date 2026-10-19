@@ -22,6 +22,27 @@ pub const DISABLED: &[&str] = &[
     "image_generation",
     "request_permissions_tool",
 ];
+fn tool_reply_content(result: ToolReply) -> Result<(bool, Vec<Value>), String> {
+    match result {
+        Ok(mut value) => {
+            let attachment = value
+                .as_object_mut()
+                .and_then(|object| object.remove("audio_attachment"));
+            let mut items = vec![json!({"type":"inputText","text":value.to_string()})];
+            if let Some(audio) = attachment {
+                let mime = audio["mime_type"]
+                    .as_str()
+                    .ok_or("Audio MIME type missing")?;
+                let data = audio["data_base64"].as_str().ok_or("Audio data missing")?;
+                items.push(
+                    json!({"type":"inputAudio","audioUrl":format!("data:{mime};base64,{data}")}),
+                );
+            }
+            Ok((true, items))
+        }
+        Err(error) => Ok((false, vec![json!({"type":"inputText","text":error})])),
+    }
+}
 pub fn config() -> Value {
     let mut c = serde_json::Map::new();
     for k in DISABLED {
@@ -137,7 +158,10 @@ impl Codex {
         Ok(())
     }
     pub fn reply(&self, request: &Value, result: ToolReply) -> Result<(), String> {
-        self.rpc.send(&json!({"id":request["id"],"result":{"success":result.is_ok(),"contentItems":[{"type":"inputText","text":match result{Ok(v)=>v.to_string(),Err(e)=>e}}]}}))
+        let (success, content_items) = tool_reply_content(result)?;
+        self.rpc.send(
+            &json!({"id":request["id"],"result":{"success":success,"contentItems":content_items}}),
+        )
     }
     pub fn host_call(&self, v: &Value) -> Result<HostCall, String> {
         let p = &v["params"];
@@ -151,5 +175,20 @@ impl Codex {
             name: p["tool"].as_str().unwrap_or("").into(),
             arguments: p["arguments"].clone(),
         })
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn explicit_audio_tool_output_becomes_native_input_audio() {
+        let (_, items) = tool_reply_content(Ok(json!({
+            "sample":{"id":"sample-id","name":"riff.wav"},
+            "audio_attachment":{"mime_type":"audio/wav","data_base64":"UklGRAA="}
+        })))
+        .unwrap();
+        assert_eq!(items[1]["type"], "inputAudio");
+        assert_eq!(items[1]["audioUrl"], "data:audio/wav;base64,UklGRAA=");
+        assert!(!items[0].to_string().contains("audio_attachment"));
     }
 }

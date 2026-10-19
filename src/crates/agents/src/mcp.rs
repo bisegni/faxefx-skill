@@ -16,6 +16,28 @@ pub struct Mcp {
     stop: Arc<AtomicBool>,
     pub calls: mpsc::Receiver<(HostCall, mpsc::SyncSender<ToolReply>)>,
 }
+fn tool_result_content(result: ToolReply) -> Value {
+    match result {
+        Ok(mut value) => {
+            let attachment = value
+                .as_object_mut()
+                .and_then(|object| object.remove("audio_attachment"));
+            let mut content = vec![json!({"type":"text","text":value.to_string()})];
+            if let Some(audio) = attachment {
+                match (audio["data_base64"].as_str(), audio["mime_type"].as_str()) {
+                    (Some(data), Some(mime)) => {
+                        content.push(json!({"type":"audio","data":data,"mimeType":mime}))
+                    }
+                    _ => {
+                        return json!({"isError":true,"content":[{"type":"text","text":"Audio attachment payload is invalid"}]});
+                    }
+                }
+            }
+            json!({"isError":false,"content":content})
+        }
+        Err(error) => json!({"isError":true,"content":[{"type":"text","text":error}]}),
+    }
+}
 impl Mcp {
     pub fn start() -> Result<Self, String> {
         let server = tiny_http::Server::http("127.0.0.1:0").map_err(|e| e.to_string())?;
@@ -82,9 +104,7 @@ impl Mcp {
                             Err("Tool queue busy".into())
                         } else {
                             match rrx.recv_timeout(Duration::from_secs(30)) {
-                                Ok(r) => Ok(
-                                    json!({"isError":r.is_err(),"content":[{"type":"text","text":match r{Ok(v)=>v.to_string(),Err(e)=>e}}]}),
-                                ),
+                                Ok(result) => Ok(tool_result_content(result)),
                                 Err(_) => Err("Tool request timed out".into()),
                             }
                         }
@@ -114,5 +134,25 @@ impl Mcp {
 impl Drop for Mcp {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn tool_audio_result_is_sent_as_audio_content_not_text_data() {
+        let result = tool_result_content(Ok(json!({
+            "sample":{"name":"riff.wav"},
+            "audio_attachment":{"mime_type":"audio/wav","data_base64":"UklGRAA="}
+        })));
+        assert_eq!(result["isError"], false);
+        assert_eq!(result["content"][1]["type"], "audio");
+        assert_eq!(result["content"][1]["mimeType"], "audio/wav");
+        assert!(
+            !result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("UklGRAA=")
+        );
     }
 }

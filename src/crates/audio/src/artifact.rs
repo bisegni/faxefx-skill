@@ -117,6 +117,26 @@ impl Library {
         }
         Ok(a)
     }
+    pub fn list(&self) -> Result<Vec<Artifact>, String> {
+        let mut artifacts = Vec::new();
+        for entry in fs::read_dir(&self.root).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if validate_id(id).is_ok()
+                && let Ok(artifact) = self.get(id)
+            {
+                artifacts.push(artifact);
+            }
+        }
+        artifacts.sort_by_key(|a| a.name.to_lowercase());
+        Ok(artifacts)
+    }
     pub fn path(&self, id: &str) -> Result<PathBuf, String> {
         let a = self.get(id)?;
         if !["wav", "flac", "aiff", "aif", "mp3", "ogg", "m4a"].contains(&a.extension.as_str()) {
@@ -128,6 +148,75 @@ impl Library {
             return Err("Audio artifact changed".into());
         }
         Ok(p)
+    }
+    /// Produce a bounded mono WAV preview suitable for explicit sharing with an agent.
+    /// Source audio is decoded locally and never persisted in this normalized form.
+    pub fn agent_audio(&self, id: &str, start: f64, duration: f64) -> Result<String, String> {
+        let artifact = self.get(id)?;
+        if !start.is_finite()
+            || start < 0.0
+            || !duration.is_finite()
+            || !(0.25..=30.0).contains(&duration)
+            || start + duration > artifact.duration + 0.001
+        {
+            return Err("Agent audio excerpt must be 0.25–30 seconds within the sample".into());
+        }
+        let decoder =
+            rodio::Decoder::try_from(fs::File::open(self.path(id)?).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        let rate = decoder.sample_rate();
+        let channels = decoder.channels() as usize;
+        if !(8_000..=192_000).contains(&rate) || !(1..=8).contains(&channels) {
+            return Err("Audio format is outside supported sharing limits".into());
+        }
+        let samples: Vec<f32> = decoder
+            .skip_duration(std::time::Duration::from_secs_f64(start))
+            .take_duration(std::time::Duration::from_secs_f64(duration))
+            .collect();
+        let frames: Vec<f32> = samples
+            .chunks_exact(channels)
+            .map(|frame| frame.iter().copied().sum::<f32>() / channels as f32)
+            .collect();
+        if frames.len() < (rate as f64 * 0.25) as usize {
+            return Err("Audio excerpt is too short to share".into());
+        }
+        let output_rate = 24_000_u32;
+        let output_count = (frames.len() as u64 * output_rate as u64 / rate as u64) as usize;
+        let mut pcm = Vec::with_capacity(output_count * 2);
+        for index in 0..output_count {
+            let position = index as f64 * rate as f64 / output_rate as f64;
+            let left = position.floor() as usize;
+            let right = (left + 1).min(frames.len() - 1);
+            let frac = (position - left as f64) as f32;
+            let value = frames[left] * (1.0 - frac) + frames[right] * frac;
+            let value = if value.is_finite() {
+                value.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            let value = if value <= -1.0 {
+                i16::MIN
+            } else {
+                (value * i16::MAX as f32).round() as i16
+            };
+            pcm.extend_from_slice(&value.to_le_bytes());
+        }
+        let data_len = u32::try_from(pcm.len()).map_err(|_| "Audio excerpt is too large")?;
+        let mut wav = Vec::with_capacity(44 + pcm.len());
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&output_rate.to_le_bytes());
+        wav.extend_from_slice(&(output_rate * 2).to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        wav.extend_from_slice(&pcm);
+        Ok(base64_encode(&wav))
     }
     pub fn excerpt_rms(&self, id: &str, start: f64, duration: f64) -> Result<f64, String> {
         if !start.is_finite()
@@ -173,6 +262,28 @@ impl Library {
         )
         .map_err(|e| e.to_string())
     }
+}
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let a = chunk[0];
+        let b = *chunk.get(1).unwrap_or(&0);
+        let c = *chunk.get(2).unwrap_or(&0);
+        out.push(TABLE[(a >> 2) as usize] as char);
+        out.push(TABLE[(((a & 3) << 4) | (b >> 4)) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(((b & 15) << 2) | (c >> 6)) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(c & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 pub fn validate_id(id: &str) -> Result<(), String> {
     if id.len() != 64

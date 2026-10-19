@@ -65,5 +65,6 @@ mod tests {
 }
 
 pub mod artifact;
+pub mod capture;
 pub mod playback;
 pub mod worker;

@@ -43,6 +43,7 @@ enum Message {
     SubmissionRecorded(Result<(), String>),
     Stop,
     Agent(u64, axe_agents::runtime::AgentEvent),
+    ChatAction(String, iced::widget::text_editor::Action),
     Runtime(u64, u64, bool, Result<integration::RuntimeView, String>),
     SelectBlock(String),
     SelectScene(u8),
@@ -64,12 +65,18 @@ enum Message {
     CloseChecked(Result<(bool, bool), String>),
     Exit,
     Import(Lane),
+    RefreshAudioInputs,
+    AudioInputs(Result<Vec<axe_audio::capture::InputDevice>, String>),
+    SelectAudioInput(axe_audio::capture::InputDevice),
+    BeginAudioCapture,
+    StopAudioCapture,
+    AudioCaptureEvent(axe_audio::capture::Event),
     ImportCancelled,
     Imported(Lane, Result<axe_audio::artifact::Artifact, String>),
     ExcerptStart(String),
     ExcerptDuration(String),
     Play(Lane),
-    PlayReady(Result<(std::path::PathBuf, f64, f64, f32), String>),
+    PlayReady(Result<(String, std::path::PathBuf, f64, f64, f32, f64), String>),
     PauseAudio,
     ResumeAudio,
     Volume(f32),
@@ -79,6 +86,7 @@ enum Message {
     Analyze(Lane),
     Analyzed(Result<(String, serde_json::Value), String>),
     Attach(String, bool),
+    ShareAudio(String, bool),
     ViewAnalysis(String),
     CompareAudio,
     Retry,
@@ -88,6 +96,8 @@ enum Message {
     InspectorVisibility(String, String, String, bool),
     AutoLayout,
     Choose(axe_agents::Provider),
+    AgentChatChoice(axe_agents::Provider, bool),
+    CancelAgentChatChoice,
     Drag(pane_grid::DragEvent),
     Resize(pane_grid::ResizeEvent),
     Reset,
@@ -133,6 +143,7 @@ struct Studio {
     agent: Option<axe_agents::runtime::AgentHandle>,
     agent_epoch: u64,
     provider: Option<axe_agents::Provider>,
+    pending_provider: Option<axe_agents::Provider>,
     agent_ready: bool,
     agent_busy: bool,
     composer: String,
@@ -142,6 +153,7 @@ struct Studio {
     history_namespace: String,
     analysis_dialog: Option<serde_json::Value>,
     history: Vec<axe_session::ChatMessage>,
+    chat_contents: std::collections::BTreeMap<String, iced::widget::text_editor::Content>,
     dirty: bool,
     recovery: bool,
     device_busy: bool,
@@ -157,6 +169,13 @@ struct Studio {
     destination: String,
     reference: Option<axe_audio::artifact::Artifact>,
     recording: Option<axe_audio::artifact::Artifact>,
+    audio_inputs: Vec<axe_audio::capture::InputDevice>,
+    selected_audio_input: Option<axe_audio::capture::InputDevice>,
+    capture: Option<axe_audio::capture::Capture>,
+    capture_events: Option<
+        std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<axe_audio::capture::Event>>>,
+    >,
+    capturing: bool,
     player: Option<(
         axe_audio::playback::Player,
         std::sync::Arc<
@@ -168,10 +187,14 @@ struct Studio {
     level_match: bool,
     audio_busy: bool,
     audio_position: f64,
+    audio_artifact: Option<String>,
+    audio_duration: f64,
+    audio_excerpt_start: f64,
     audio_playing: bool,
     volume: f32,
     analyses: std::collections::BTreeMap<String, serde_json::Value>,
     attached: std::collections::BTreeSet<String>,
+    shared_audio: std::collections::BTreeSet<String>,
 }
 fn layout() -> pane_grid::State<Pane> {
     use pane_grid::{Axis, Configuration as C};
@@ -218,6 +241,20 @@ impl Default for Studio {
             .as_ref()
             .and_then(|b| b.lock().ok()?.history(&history_namespace).ok())
             .unwrap_or_default();
+        let chat_contents = history
+            .iter()
+            .map(|m| {
+                let body = if m.role == "tool" {
+                    m.body.lines().next().unwrap_or("")
+                } else {
+                    &m.body
+                };
+                (
+                    m.id.clone(),
+                    iced::widget::text_editor::Content::with_text(body),
+                )
+            })
+            .collect();
         let store = directories::ProjectDirs::from("org", "AxeStudio", "AxeStudio").and_then(|d| {
             std::fs::create_dir_all(d.data_local_dir()).ok()?;
             Store::open(d.data_local_dir().join("studio.sqlite3")).ok()
@@ -256,6 +293,7 @@ impl Default for Studio {
             agent: None,
             agent_epoch: 0,
             provider: None,
+            pending_provider: None,
             agent_ready: false,
             agent_busy: false,
             composer: String::new(),
@@ -265,6 +303,7 @@ impl Default for Studio {
             history_namespace,
             analysis_dialog: None,
             history,
+            chat_contents,
             dirty: false,
             recovery: false,
             device_busy: false,
@@ -282,16 +321,25 @@ impl Default for Studio {
             destination: "0".into(),
             reference: None,
             recording: None,
+            audio_inputs: vec![],
+            selected_audio_input: None,
+            capture: None,
+            capture_events: None,
+            capturing: false,
             player: None,
             excerpt_start: "0".into(),
             excerpt_duration: "30".into(),
             level_match: true,
             audio_busy: false,
             audio_position: 0.,
+            audio_artifact: None,
+            audio_duration: 0.,
+            audio_excerpt_start: 0.,
             audio_playing: false,
             volume: 0.8,
             analyses: Default::default(),
             attached: Default::default(),
+            shared_audio: Default::default(),
         }
     }
 }
@@ -302,7 +350,21 @@ impl Studio {
             status: "Discovering USB MIDI endpoints…".into(),
             ..Self::default()
         };
-        (s, Self::discover())
+        (
+            s,
+            iced::Task::batch([Self::discover(), Self::discover_audio_inputs()]),
+        )
+    }
+    fn discover_audio_inputs() -> iced::Task<Message> {
+        iced::Task::perform(
+            async {
+                tokio::task::spawn_blocking(axe_audio::capture::input_devices)
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r)
+            },
+            Message::AudioInputs,
+        )
     }
     fn discover() -> iced::Task<Message> {
         iced::Task::perform(
@@ -316,6 +378,14 @@ impl Studio {
         )
     }
     fn update(&mut self, m: Message) -> iced::Task<Message> {
+        if let Message::ChatAction(id, action) = &m {
+            if !action.is_edit()
+                && let Some(content) = self.chat_contents.get_mut(id)
+            {
+                content.perform(action.clone());
+            }
+            return iced::Task::none();
+        }
         if let Some(task) = self.handle_integration(m.clone()) {
             return task;
         }
@@ -329,6 +399,7 @@ impl Studio {
                 | Message::SwapPane(_)
         );
         match m {
+            Message::ChatAction(_, _) => {}
             Message::Mock => {
                 if self.backend.is_none() {
                     self.status =
@@ -689,6 +760,11 @@ impl Studio {
                 }
             }
             Message::Choose(p) => return self.choose_provider(p),
+            Message::AgentChatChoice(provider, clear) => {
+                self.pending_provider = None;
+                return self.connect_provider(provider, clear);
+            }
+            Message::CancelAgentChatChoice => self.pending_provider = None,
             Message::Drag(pane_grid::DragEvent::Dropped { pane, target }) => {
                 self.panes.drop(pane, target);
             }
@@ -805,6 +881,7 @@ fn main() -> iced::Result {
                 }),
                 s.agent_subscription(),
                 s.audio_subscription(),
+                s.capture_subscription(),
                 iced::time::every(std::time::Duration::from_millis(25)).map(|_| Message::LiveTick),
             ];
             if s.snapshot.is_none() && s.backend.is_some() {

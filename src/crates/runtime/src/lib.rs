@@ -25,6 +25,7 @@ pub struct Backend {
     session: Option<Session<Mock>>,
     hardware_endpoints: Option<(String, String)>,
     attached: BTreeSet<String>,
+    shared_audio: BTreeSet<String>,
     midi: Option<axe_session::usb::live::MidiService>,
 }
 impl Backend {
@@ -50,6 +51,7 @@ impl Backend {
             session: None,
             hardware_endpoints: None,
             attached: BTreeSet::new(),
+            shared_audio: BTreeSet::new(),
             midi: None,
         })))
     }
@@ -66,6 +68,7 @@ impl Backend {
             .set_setting("last_namespace", snapshot.context.target.namespace())
             .map_err(err)?;
         self.attached.clear();
+        self.shared_audio.clear();
         self.session = if snapshot.context.target == Target::TestMock {
             let path = self.root.join("mock-edit-buffer.json");
             let state = if path.is_file() {
@@ -293,6 +296,78 @@ impl Backend {
         }
         Ok(())
     }
+    pub fn share_audio(&mut self, id: &str, share: bool) -> Result<(), String> {
+        self.library()?.path(id)?;
+        if share {
+            self.shared_audio.insert(id.into());
+        } else {
+            self.shared_audio.remove(id);
+        }
+        Ok(())
+    }
+    fn audio_samples(&self) -> Result<Vec<Value>, String> {
+        let library = self.library()?;
+        library
+            .list()?
+            .into_iter()
+            .map(|sample| {
+                Ok(json!({
+                    "id": sample.id,
+                    "name": sample.name,
+                    "duration_seconds": sample.duration,
+                    "bytes": sample.bytes,
+                    "analysis_available": library.report(&sample.id).is_ok(),
+                    "audio_shared_with_agent": self.shared_audio.contains(&sample.id),
+                }))
+            })
+            .collect()
+    }
+    fn analyze_audio(&self, arguments: &Value) -> Result<Value, String> {
+        let id = arguments["id"].as_str().ok_or("Audio sample ID required")?;
+        let library = self.library()?;
+        let sample = library.get(id)?;
+        let start = arguments["start_seconds"].as_f64().unwrap_or(0.0);
+        let duration = arguments["duration_seconds"]
+            .as_f64()
+            .unwrap_or_else(|| (sample.duration - start).clamp(0.0, 30.0));
+        if !start.is_finite()
+            || start < 0.0
+            || !duration.is_finite()
+            || duration < 0.25
+            || duration > 30.0
+            || start + duration > sample.duration + 0.001
+        {
+            return Err(
+                "Choose an excerpt of at least 0.25 seconds within the sample (up to 30 seconds)."
+                    .into(),
+            );
+        }
+        let path = library.path(id)?;
+        let mut worker =
+            axe_audio::worker::Worker::start(&axe_audio::worker::Worker::bundled_path()?)?;
+        let report = worker.request(
+            "measure",
+            json!({"path":path,"artifact":id,"start":start,"duration":duration}),
+        )?;
+        library.save_report(id, &report)?;
+        Ok(
+            json!({"sample":{"id":sample.id,"name":sample.name,"duration_seconds":sample.duration},"analysis":report}),
+        )
+    }
+    fn shared_audio(&self, arguments: &Value) -> Result<Value, String> {
+        let id = arguments["id"].as_str().ok_or("Audio sample ID required")?;
+        if !self.shared_audio.contains(id) {
+            return Err("Enable Share audio with agent for this sample in Axe Studio first".into());
+        }
+        let library = self.library()?;
+        let sample = library.get(id)?;
+        let duration = sample.duration.min(30.0);
+        let audio = library.agent_audio(id, 0.0, duration)?;
+        Ok(json!({
+            "sample":{"id":sample.id,"name":sample.name,"duration_seconds":duration},
+            "audio_attachment":{"mime_type":"audio/wav","data_base64":audio}
+        }))
+    }
     pub fn dispatch(&mut self, call: HostCall, scope: Scope) -> ToolReply {
         if self.snapshot.is_none() {
             return Err("No device snapshot is bound to this conversation".into());
@@ -305,8 +380,17 @@ impl Backend {
         }
         match call.name.as_str() {
             "session_inspect" => Ok(
-                json!({"snapshot":self.snapshot,"capabilities":self.capabilities(),"parameter_catalog":axe_session::usb::catalog_info(),"live_freshness":self.midi.as_ref().map(|m| &m.live.freshness),"attached_analysis":self.attached}),
+                json!({"snapshot":self.snapshot,"capabilities":self.capabilities(),"parameter_catalog":axe_session::usb::catalog_info(),"live_freshness":self.midi.as_ref().map(|m| &m.live.freshness),"attached_analysis":self.attached,"available_audio_samples":self.audio_samples()?}),
             ),
+            "audio_samples" => Ok(json!({"samples":self.audio_samples()?})),
+            "audio_analyze" if scope.read_only => {
+                Err("Audio analysis is disabled during read-only initialization".into())
+            }
+            "audio_analyze" => self.analyze_audio(&call.arguments),
+            "audio_sample" if scope.read_only => {
+                Err("Audio sharing is disabled during read-only initialization".into())
+            }
+            "audio_sample" => self.shared_audio(&call.arguments),
             "block_inspect" => {
                 let id = call.arguments["block"]
                     .as_str()
@@ -435,6 +519,63 @@ pub fn handlers(shared: Shared, namespace: String, provider: Provider) -> (ToolH
 mod tests {
     use super::*;
     use axe_session::Transport;
+    fn test_wav() -> Vec<u8> {
+        let rate = 24_000_u32;
+        let count = rate;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + count * 2).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&rate.to_le_bytes());
+        wav.extend_from_slice(&(rate * 2).to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(count * 2).to_le_bytes());
+        for i in 0..count {
+            let sample = (i as f32 * std::f32::consts::TAU * 440. / rate as f32).sin() * 0.4;
+            wav.extend_from_slice(&((sample * i16::MAX as f32) as i16).to_le_bytes());
+        }
+        wav
+    }
+    #[test]
+    fn sample_metadata_and_audio_are_available_only_after_explicit_share() {
+        let root = std::env::temp_dir().join(format!("axe-audio-agent-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("recording.wav");
+        std::fs::write(&source, test_wav()).unwrap();
+        let shared_backend = Backend::open(root.join("app")).unwrap();
+        let mut backend = shared_backend.lock().unwrap();
+        let artifact = axe_audio::artifact::Library::open(root.join("app/audio"))
+            .unwrap()
+            .import(&source)
+            .unwrap();
+
+        let samples = backend.audio_samples().unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0]["id"], artifact.id);
+        assert_eq!(samples[0]["audio_shared_with_agent"], false);
+        assert!(backend.shared_audio(&json!({"id":artifact.id})).is_err());
+
+        backend.share_audio(&artifact.id, true).unwrap();
+        let shared = backend.shared_audio(&json!({"id":artifact.id})).unwrap();
+        assert_eq!(shared["sample"]["name"], "recording.wav");
+        assert!(
+            shared["audio_attachment"]["data_base64"]
+                .as_str()
+                .unwrap()
+                .starts_with("UklGR")
+        );
+        assert!(shared["audio_attachment"].get("path").is_none());
+        backend.bind(Mock::default().snapshot().unwrap()).unwrap();
+        assert!(backend.shared_audio(&json!({"id":artifact.id})).is_err());
+        drop(backend);
+        drop(shared_backend);
+        let _ = std::fs::remove_dir_all(root);
+    }
     #[test]
     fn durable_mock_restores_after_restart_without_replaying_changes() {
         let root = std::env::temp_dir().join(format!("axe-durable-mock-{}", uuid::Uuid::new_v4()));

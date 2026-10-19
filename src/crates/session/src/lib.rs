@@ -164,6 +164,21 @@ impl Store {
         self.db.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,value]).map_err(storage)?;
         Ok(())
     }
+    /// Start a fresh agent conversation for this device namespace. Hardware/session
+    /// journals are deliberately untouched; only chat and provider resume IDs clear.
+    pub fn clear_agent_chat(&self, namespace: &str) -> Result<(), Error> {
+        let tx = self.db.unchecked_transaction().map_err(storage)?;
+        tx.execute("DELETE FROM messages WHERE namespace=?", [namespace])
+            .map_err(storage)?;
+        for provider in ["Codex", "Claude"] {
+            tx.execute(
+                "DELETE FROM settings WHERE key=?",
+                [format!("provider.{namespace}.{provider}")],
+            )
+            .map_err(storage)?;
+        }
+        tx.commit().map_err(storage)
+    }
 }
 fn storage(e: impl std::fmt::Display) -> Error {
     Error::Storage(e.to_string())
@@ -820,6 +835,40 @@ mod tests {
             assert_eq!(chat[0].3, "retained interrupted text");
         }
         let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn clearing_agent_chat_removes_messages_and_resume_ids_only() {
+        let mut store = Store::memory().unwrap();
+        store
+            .message(
+                "mock",
+                &ChatMessage {
+                    id: "chat-1".into(),
+                    provider: "Codex".into(),
+                    role: "user".into(),
+                    body: "hello".into(),
+                    status: "sent".into(),
+                },
+                false,
+            )
+            .unwrap();
+        store
+            .set_setting("provider.mock.Codex", "resume-1")
+            .unwrap();
+        store
+            .set_setting("provider.mock.Claude", "resume-2")
+            .unwrap();
+        store.set_setting("layout.current", "preserve-me").unwrap();
+
+        store.clear_agent_chat("mock").unwrap();
+
+        assert!(store.messages("mock").unwrap().is_empty());
+        assert_eq!(store.setting("provider.mock.Codex").unwrap(), None);
+        assert_eq!(store.setting("provider.mock.Claude").unwrap(), None);
+        assert_eq!(
+            store.setting("layout.current").unwrap().as_deref(),
+            Some("preserve-me")
+        );
     }
     #[test]
     fn cancellation_between_writes_rolls_back_and_never_touches_later_targets() {

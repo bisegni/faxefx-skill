@@ -1,6 +1,18 @@
 use crate::{Message, Studio, integration::Lane, style};
 use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
 use iced::{Element, Length};
+fn chat_editor_style(
+    _: &iced::Theme,
+    _: iced::widget::text_editor::Status,
+) -> iced::widget::text_editor::Style {
+    iced::widget::text_editor::Style {
+        background: iced::Background::Color(iced::Color::TRANSPARENT),
+        border: iced::Border::default(),
+        placeholder: style::MUTED,
+        value: style::TEXT,
+        selection: style::BLUE,
+    }
+}
 fn control<'a>(name: &'a str, action: Option<Message>) -> iced::widget::Button<'a, Message> {
     button(text(name).size(12))
         .padding([6, 10])
@@ -57,12 +69,11 @@ impl Studio {
                 } else {
                     style::MUTED
                 }),
-                text(if m.role == "tool" {
-                    m.body.lines().next().unwrap_or("")
-                } else {
-                    &m.body
-                })
-                .size(if m.role == "tool" { 11 } else { 13 })
+                iced::widget::text_editor(self.chat_contents.get(&m.id).expect("history content"))
+                    .on_action(move |action| Message::ChatAction(m.id.clone(), action))
+                    .style(chat_editor_style)
+                    .padding(0)
+                    .size(if m.role == "tool" { 11 } else { 13 })
             ]
             .spacing(6);
             if m.status == "not_sent" {
@@ -95,17 +106,49 @@ impl Studio {
             .on_submit_maybe((self.agent_ready && !self.agent_busy).then_some(Message::Send))
             .size(13)
             .padding(12);
-        column![
-            providers,
+        let chat_choice = self.pending_provider.map(|provider| {
+            column![
+                text(format!("Connect {provider:?} with which chat?")).size(12),
+                row![
+                    control(
+                        "Continue previous chat",
+                        Some(Message::AgentChatChoice(provider, false))
+                    )
+                    .width(Length::Fill),
+                    control(
+                        "Clear and start new",
+                        Some(Message::AgentChatChoice(provider, true))
+                    )
+                    .width(Length::Fill),
+                    control("Cancel", Some(Message::CancelAgentChatChoice))
+                ]
+                .spacing(6)
+            ]
+            .spacing(6)
+        });
+        let mut content = column![providers];
+        if let Some(choice) = chat_choice {
+            content = content.push(choice);
+        }
+        content = content.push(
             text_input("Claude API key (session only)", &self.claude_key)
                 .secure(true)
                 .on_input(Message::ClaudeKey)
                 .size(11)
                 .padding(8),
+        );
+        content = content.push(
             text(self.agent_error.as_deref().unwrap_or(""))
                 .size(11)
                 .color(style::AMBER),
-            scrollable(history).spacing(8).height(Length::Fill),
+        );
+        content = content.push(
+            scrollable(history)
+                .id(iced::widget::Id::new("chat-history"))
+                .spacing(8)
+                .height(Length::Fill),
+        );
+        content = content.push(
             text(if self.agent_busy {
                 "Assistant working…"
             } else if self.agent_ready {
@@ -115,7 +158,9 @@ impl Studio {
             })
             .size(11)
             .color(style::MUTED),
-            composer,
+        );
+        content = content.push(composer);
+        content = content.push(
             row![
                 text(format!("{} attached summaries", self.attached.len()))
                     .size(10)
@@ -129,10 +174,9 @@ impl Studio {
                 )
             ]
             .spacing(6)
-            .align_y(iced::Center)
-        ]
-        .spacing(10)
-        .into()
+            .align_y(iced::Center),
+        );
+        content.spacing(10).into()
     }
     fn audio_lane<'a>(
         &'a self,
@@ -164,6 +208,26 @@ impl Studio {
                     .width(Length::Fill)
                     .height(30),
                 );
+            if self.audio_artifact.as_deref() == Some(a.id.as_str()) {
+                let fraction = if self.audio_duration > 0. {
+                    (self.audio_position / self.audio_duration).clamp(0., 1.) as f32
+                } else {
+                    0.0
+                };
+                c = c
+                    .push(
+                        container(iced::widget::progress_bar(0.0..=1.0, fraction))
+                            .height(Length::Fixed(8.0)),
+                    )
+                    .push(
+                        text(format!(
+                            "Playing at {:.1}s / {:.1}s",
+                            self.audio_position, self.audio_duration
+                        ))
+                        .size(10)
+                        .color(style::BLUE),
+                    );
+            }
             let mut actions = row![
                 control("▶", Some(Message::Play(which))),
                 control(
@@ -173,6 +237,13 @@ impl Studio {
             ]
             .spacing(5)
             .align_y(iced::Center);
+            let share_id = a.id.clone();
+            actions = actions.push(
+                iced::widget::checkbox(self.shared_audio.contains(&a.id))
+                    .label("Audio available to agent · up to 30s")
+                    .text_size(10)
+                    .on_toggle(move |enabled| Message::ShareAudio(share_id.clone(), enabled)),
+            );
             if self.analyses.contains_key(&a.id) {
                 let id = a.id.clone();
                 actions = actions
@@ -202,10 +273,49 @@ impl Studio {
             .into()
     }
     pub(super) fn audio_view(&self) -> Element<'_, Message> {
-        row![
-            self.audio_lane(Lane::Reference, "Reference guitar", self.reference.as_ref()),
-            self.audio_lane(Lane::Recording, "Your recording", self.recording.as_ref()),
-            column![
+        let capture = if self.capturing {
+            control("Stop capture", Some(Message::StopAudioCapture))
+        } else {
+            control(
+                "Record",
+                self.selected_audio_input
+                    .is_some()
+                    .then_some(Message::BeginAudioCapture),
+            )
+        };
+        column![
+            row![
+                text("Capture guitar from Axe-Fx USB or an audio interface")
+                    .size(12)
+                    .color(style::MUTED),
+                space::horizontal(),
+                control("Refresh inputs", Some(Message::RefreshAudioInputs))
+            ]
+            .align_y(iced::Center),
+            row![
+                iced::widget::pick_list(
+                    self.audio_inputs.clone(),
+                    self.selected_audio_input.clone(),
+                    Message::SelectAudioInput,
+                )
+                .placeholder("Choose audio input")
+                .text_size(11)
+                .padding(7)
+                .width(Length::Fill),
+                capture
+            ]
+            .spacing(6),
+            text(if self.capturing {
+                "Recording locally · max 60 seconds · sharing is enabled when attached"
+            } else {
+                "Choose Record, then stop the passage. Captures appear as Your recording for local analysis."
+            })
+            .size(10)
+            .color(style::MUTED),
+            row![
+                self.audio_lane(Lane::Reference, "Reference guitar", self.reference.as_ref()),
+                self.audio_lane(Lane::Recording, "Your recording", self.recording.as_ref()),
+                column![
                 row![
                     text_input("Start s", &self.excerpt_start)
                         .on_input(Message::ExcerptStart)
@@ -258,11 +368,12 @@ impl Studio {
                     .label("A/B level match")
                     .text_size(10)
                     .on_toggle(Message::LevelMatch)
+                ]
+                .spacing(8)
             ]
             .spacing(8)
         ]
         .spacing(10)
-        .align_y(iced::Center)
         .into()
     }
     pub(super) fn modal<'a>(&'a self, base: Element<'a, Message>) -> Element<'a, Message> {

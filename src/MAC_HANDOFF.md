@@ -3,7 +3,8 @@
 This is an internal candidate, not a release or a claim of complete hardware
 support. See CAPABILITIES.md before testing. Build identity, file hashes, signature
 status and source-dirty flag are in the adjacent `manifest.json`. The zip has a
-`.sha256` companion. Packages are generated under `dist/axe-studio-darwin-arm64-release/`.
+`.sha256` companion. The latest package always replaces `dist/axe-studio/` and
+`dist/axe-studio.zip`.
 Open `Axe Studio.app`; it bundles the audio interpreter and dependencies.
 
 ## Manual checklist
@@ -19,10 +20,12 @@ Open `Axe Studio.app`; it bundles the audio interpreter and dependencies.
    destination, dirty-close Save/Restore/Leave/Cancel and persisted restart state.
 5. Restart and switch providers. Confirm visible history remains, partial messages
    remain marked, and no mutation is replayed or duplicated.
-6. Import reference and recording files, choose bounded excerpts, play/pause/stop,
-   compare with level matching, inspect measurements and attach only selected
-   summaries. Ordinary import/analysis stays local; attached summaries go to the
-   selected provider when requested through app tools.
+6. In Reference audio & audition, select an OS audio input (Axe-Fx USB audio if
+   available, or an interface), record a short guitar passage and stop. Confirm it
+   appears as Your recording with a waveform. Analyze a bounded excerpt, then
+   explicitly attach its summary before asking the agent to assess it. Raw audio
+   remains local. Also import a reference file, compare with level matching, and
+   check playback and measurements.
 7. Connect Axe-Fx for routing/parameter inspection. Unknown values must remain
    unknown. For hardware Save, first back up a disposable destination in Axe-Edit.
    Press Save tone, check the explicit 0–1023 destination and confirm overwrite.
@@ -43,7 +46,7 @@ performed before explicit acceptance of the completed application.
 
 ## Live synchronization candidate
 
-Build-only candidate: `dist/axe-studio-darwin-arm64-release-live-sync/Axe Studio.app`.
+Build-only candidate: `dist/axe-studio/Axe Studio.app`.
 The implementation agent does not launch this candidate or access MIDI hardware.
 
 Manual acceptance:

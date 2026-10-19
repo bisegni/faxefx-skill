@@ -32,6 +32,15 @@ fn authored_artifact_is_local_verified_and_bounded() {
     assert_eq!(a.id.len(), 64);
     assert!((a.duration - 1.).abs() < 0.001);
     assert!(a.waveform.len() <= 256);
+    let listed = library.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, a.id);
+    let shared = library.agent_audio(&a.id, 0.0, 1.0).unwrap();
+    assert!(
+        shared.starts_with("UklGR"),
+        "normalized payload should be WAV data"
+    );
+    assert!(library.agent_audio(&a.id, 0.0, 31.0).is_err());
     assert!((a.rms - 0.1767767).abs() < 0.001);
     assert!((library.excerpt_rms(&a.id, 0.25, 0.5).unwrap() - a.rms).abs() < 0.001);
     assert!(library.excerpt_rms(&a.id, 2., 1.).is_err());

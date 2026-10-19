@@ -37,7 +37,7 @@ fn codex() {
             "skills/list" => json!({"data":[]}),
             "thread/start" | "thread/resume" => {
                 assert_eq!(v["params"]["sandbox"], "read-only");
-                assert_eq!(v["params"]["dynamicTools"].as_array().unwrap().len(), 5);
+                assert_eq!(v["params"]["dynamicTools"].as_array().unwrap().len(), 8);
                 json!({"thread":{"id":"fixture-thread"},"sandbox":{"type":"readOnly"}})
             }
             "turn/start" => {

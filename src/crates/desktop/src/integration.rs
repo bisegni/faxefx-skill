@@ -70,6 +70,26 @@ fn audio_events(source: &AudioSource) -> impl iced::futures::Stream<Item = Messa
             .map(|e| (Message::AudioEvent(e), receiver))
     })
 }
+#[derive(Clone)]
+pub struct CaptureSource {
+    receiver: Arc<Mutex<mpsc::Receiver<axe_audio::capture::Event>>>,
+}
+impl std::hash::Hash for CaptureSource {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (Arc::as_ptr(&self.receiver) as usize).hash(state)
+    }
+}
+fn capture_events(source: &CaptureSource) -> impl iced::futures::Stream<Item = Message> + use<> {
+    let receiver = source.receiver.clone();
+    iced::futures::stream::unfold(receiver, |receiver| async move {
+        let r = receiver.clone();
+        tokio::task::spawn_blocking(move || r.lock().ok()?.recv().ok())
+            .await
+            .ok()
+            .flatten()
+            .map(|event| (Message::AudioCaptureEvent(event), receiver))
+    })
+}
 async fn blocking<T: Send + 'static>(
     job: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -87,6 +107,19 @@ impl Studio {
                         receiver: r.clone(),
                     },
                     audio_events,
+                )
+            })
+            .unwrap_or_else(Subscription::none)
+    }
+    pub(super) fn capture_subscription(&self) -> Subscription<Message> {
+        self.capture_events
+            .as_ref()
+            .map(|receiver| {
+                Subscription::run_with(
+                    CaptureSource {
+                        receiver: receiver.clone(),
+                    },
+                    capture_events,
                 )
             })
             .unwrap_or_else(Subscription::none)
@@ -145,6 +178,7 @@ impl Studio {
         let endpoints = self.input.clone().zip(self.output.clone());
         self.device_busy = true;
         self.attached.clear();
+        self.shared_audio.clear();
         self.history_namespace = namespace.clone();
         self.block_positions.clear();
         self.pending_parameters.clear();
@@ -186,6 +220,39 @@ impl Studio {
         if self.agent_busy {
             self.status = "Stop the current turn before switching providers.".into();
             return Task::none();
+        }
+        self.pending_provider = Some(provider);
+        Task::none()
+    }
+    pub(super) fn connect_provider(
+        &mut self,
+        provider: Provider,
+        clear_chat: bool,
+    ) -> Task<Message> {
+        if self.snapshot.is_none() || self.device_busy || self.agent_busy {
+            return Task::none();
+        }
+        if clear_chat {
+            let result = self
+                .backend
+                .as_ref()
+                .ok_or_else(|| "Application data unavailable".to_owned())
+                .and_then(|backend| {
+                    backend
+                        .lock()
+                        .map_err(|_| "Backend unavailable".to_owned())
+                        .and_then(|b| {
+                            b.store
+                                .clear_agent_chat(&self.namespace())
+                                .map_err(|e| e.to_string())
+                        })
+                });
+            if let Err(error) = result {
+                self.status = format!("Could not clear chat: {error}");
+                return Task::none();
+            }
+            self.history.clear();
+            self.chat_contents.clear();
         }
         self.disconnect_agent();
         self.provider = Some(provider);
@@ -268,6 +335,7 @@ impl Studio {
     }
     pub(super) fn handle_integration(&mut self, message: Message) -> Option<Task<Message>> {
         match message {
+            Message::ChatAction(_, _) => {},
             Message::Exit => return Some(iced::exit()),
             Message::ClaudeKey(key) => self.claude_key = key.chars().take(1024).collect(),
             Message::Composer(text) => self.composer = text.chars().take(12000).collect(),
@@ -324,12 +392,32 @@ impl Studio {
             Message::Runtime(epoch,request,binding,result) => {
                 if epoch!=self.epoch||request<self.runtime_applied{return Some(Task::none())}
                 self.runtime_applied=request;if binding{self.device_busy=false;}
+                let mut history_changed = false;
                 match result {
                 Ok(view) => {
+                    history_changed = self.history.len() != view.history.len()
+                        || self.history.iter().zip(&view.history).any(|(old, new)| {
+                            old.id != new.id || old.body != new.body || old.status != new.status
+                        });
                     if request >= self.snapshot_applied {
                         self.snapshot = view.snapshot.or_else(|| self.snapshot.clone());
                         self.snapshot_applied = request;
                     }
+                    for m in &view.history {
+                        let body = if m.role == "tool" {
+                            m.body.lines().next().unwrap_or("")
+                        } else {
+                            &m.body
+                        };
+                        if self.chat_contents.get(&m.id).is_none_or(|content| content.text() != body) {
+                            self.chat_contents.insert(
+                                m.id.clone(),
+                                iced::widget::text_editor::Content::with_text(body),
+                            );
+                        }
+                    }
+                    let ids: std::collections::BTreeSet<_> = view.history.iter().map(|m| m.id.as_str()).collect();
+                    self.chat_contents.retain(|id, _| ids.contains(id.as_str()));
                     self.history = view.history;
                     self.dirty = view.dirty;
                     self.recovery = view.recovery;
@@ -337,6 +425,13 @@ impl Studio {
                 Err(e) => self.status = e,
             }
             if self.resolve_pending&&!self.dirty&&!self.recovery{self.resolve_pending=false;let pending=self.pending.take();return Some(self.continue_pending(pending))}
+            return Some(if history_changed {
+                iced::widget::operation::snap_to_end::<Message>(
+                    iced::widget::Id::new("chat-history"),
+                )
+            } else {
+                Task::none()
+            });
             }
             Message::SelectBlock(id) => {
                 self.selected_block = Some(id);
@@ -531,14 +626,113 @@ impl Studio {
                     |m| m,
                 ));
             }
+            Message::RefreshAudioInputs => {
+                return Some(Task::perform(
+                    blocking(axe_audio::capture::input_devices),
+                    Message::AudioInputs,
+                ));
+            }
+            Message::AudioInputs(result) => match result {
+                Ok(inputs) => {
+                    let previous = self.selected_audio_input.clone();
+                    self.audio_inputs = inputs;
+                    self.selected_audio_input = previous
+                        .filter(|selected| self.audio_inputs.contains(selected))
+                        .or_else(|| (self.audio_inputs.len() == 1).then(|| self.audio_inputs[0].clone()));
+                    if self.audio_inputs.is_empty() {
+                        self.status = "No audio input devices are available. Connect the Axe-Fx USB audio device or an interface, then refresh.".into();
+                    }
+                }
+                Err(error) => self.status = format!("Audio input discovery failed: {error}"),
+            },
+            Message::SelectAudioInput(input) => self.selected_audio_input = Some(input),
+            Message::BeginAudioCapture => {
+                if self.capture.is_some() || self.audio_busy {
+                    return Some(Task::none());
+                }
+                let Some(input) = self.selected_audio_input.clone() else {
+                    self.status = "Select an audio input device before recording.".into();
+                    return Some(Task::none());
+                };
+                let root = self.data_root.join("audio").join("captures");
+                let device_slug: String = input
+                    .name
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+                    .take(32)
+                    .collect();
+                let output = root.join(format!(
+                    "live-capture-{}-{}.wav",
+                    if device_slug.is_empty() {
+                        "audio-input"
+                    } else {
+                        &device_slug
+                    },
+                    uuid::Uuid::new_v4()
+                ));
+                match axe_audio::capture::Capture::start(input, output) {
+                    Ok(capture) => {
+                        self.capture_events = Some(capture.events.clone());
+                        self.capture = Some(capture);
+                        self.capturing = true;
+                        self.status = format!("Recording locally · up to {} seconds", axe_audio::capture::MAX_CAPTURE_SECONDS);
+                    }
+                    Err(error) => self.status = error,
+                }
+            }
+            Message::StopAudioCapture => {
+                if let Some(capture) = &self.capture {
+                    capture.stop();
+                    self.status = "Finishing audio capture…".into();
+                }
+            }
+            Message::AudioCaptureEvent(event) => match event {
+                axe_audio::capture::Event::Started { sample_rate, channels } => {
+                    self.status = format!("Recording input · {sample_rate} Hz · {channels} channels");
+                }
+                axe_audio::capture::Event::Finished(result) => {
+                    self.capture = None;
+                    self.capture_events = None;
+                    self.capturing = false;
+                    match result {
+                        Ok(path) => {
+                            let root = self.data_root.join("audio");
+                            return Some(Task::perform(
+                                blocking(move || {
+                                    let library = axe_audio::artifact::Library::open(root)?;
+                                    let result = library.import(&path);
+                                    let _ = std::fs::remove_file(path);
+                                    result
+                                }),
+                                |result| Message::Imported(Lane::Recording, result),
+                            ));
+                        }
+                        Err(error) => self.status = error,
+                    }
+                }
+            },
             Message::Imported(lane, result) => match result {
                 Ok(artifact) => {
+                    if let Some(backend) = self.backend.clone() {
+                        match backend
+                            .lock()
+                            .map_err(|_| "Backend unavailable".to_owned())
+                            .and_then(|mut backend| backend.share_audio(&artifact.id, true))
+                        {
+                            Ok(()) => {
+                                self.shared_audio.insert(artifact.id.clone());
+                                self.status = "Sample attached. The connected agent may request up to 30 seconds of audio.".into();
+                            }
+                            Err(error) => self.status = format!(
+                                "Sample imported locally, but agent audio sharing could not be enabled: {error}"
+                            ),
+                        }
+                    }
                     if lane == Lane::Reference {
                         self.reference = Some(artifact)
                     } else {
                         self.recording = Some(artifact)
                     }
-                    self.status = "Imported locally. No recording was uploaded.".into();
                 }
                 Err(e) => self.status = e,
             },
@@ -562,11 +756,11 @@ impl Studio {
                 return Some(Task::perform(blocking(move||{
                     let library=axe_audio::artifact::Library::open(root.join("audio"))?;
                     let gains=if let Some((a,b))=pair{axe_audio::artifact::matched_gains(library.excerpt_rms(&a,start,duration)?,library.excerpt_rms(&b,start,duration)?)}else{(1.,1.)};
-                    let gain=if lane==Lane::Reference{gains.0}else{gains.1};library.path(&artifact.id).map(|p|(p,start,duration,gain))
+                    let gain=if lane==Lane::Reference{gains.0}else{gains.1};library.path(&artifact.id).map(|p|(artifact.id,p,start,duration,gain,artifact.duration))
                 }),Message::PlayReady));
             }
             Message::PlayReady(result) => match result {
-                Ok((path, start, duration, gain)) => {
+                Ok((artifact_id, path, start, duration, gain, total_duration)) => {
                     let (player, _) = self
                         .player
                         .get_or_insert_with(axe_audio::playback::Player::start);
@@ -578,11 +772,17 @@ impl Studio {
                         gain,
                     }) {
                         self.status = e
-                    } else {self.status="Opening local audio output…".into();}
+                    } else {
+                        self.status = "Opening local audio output…".into();
+                        self.audio_artifact = Some(artifact_id);
+                        self.audio_duration = total_duration;
+                        self.audio_excerpt_start = start;
+                        self.audio_position = start;
+                    }
                 }
                 Err(e) => self.status = e,
             },
-            Message::AudioEvent(event)=>{use axe_audio::playback::PlaybackEvent;match event{PlaybackEvent::Started=>{self.audio_playing=true;self.status="Playing local excerpt".into();},PlaybackEvent::Paused=>{self.audio_playing=false;self.status="Playback paused".into();},PlaybackEvent::Stopped=>{self.audio_playing=false;self.audio_position=0.;},PlaybackEvent::Position(p)=>self.audio_position=p,PlaybackEvent::Error(e)=>{self.audio_playing=false;self.status=e;}}},
+            Message::AudioEvent(event)=>{use axe_audio::playback::PlaybackEvent;match event{PlaybackEvent::Started=>{self.audio_playing=true;self.status="Playing local excerpt".into();},PlaybackEvent::Paused=>{self.audio_playing=false;self.status="Playback paused".into();},PlaybackEvent::Stopped=>{self.audio_playing=false;self.audio_position=0.;self.audio_artifact=None;},PlaybackEvent::Position(p)=>self.audio_position=(self.audio_excerpt_start+p).min(self.audio_duration),PlaybackEvent::Error(e)=>{self.audio_playing=false;self.status=e;}}},
             Message::Volume(v)=>{self.volume=v;if let Some((p,_))=&self.player{let _=p.send(axe_audio::playback::Playback::Volume(v));}},
             Message::ResumeAudio=>{if let Some((p,_))=&self.player{let _=p.send(axe_audio::playback::Playback::Resume);}},
             Message::PauseAudio => {
@@ -656,6 +856,26 @@ impl Studio {
                     self.attached.insert(id);
                 } else {
                     self.attached.remove(&id);
+                }
+            }
+            Message::ShareAudio(id, checked) => {
+                let Some(backend) = self.backend.clone() else {
+                    return Some(Task::none());
+                };
+                let result = backend
+                    .lock()
+                    .map_err(|_| "Backend unavailable".to_owned())
+                    .and_then(|mut backend| backend.share_audio(&id, checked));
+                match result {
+                    Ok(()) if checked => {
+                        self.shared_audio.insert(id);
+                        self.status = "This sample is available for the connected agent to hear.".into();
+                    }
+                    Ok(()) => {
+                        self.shared_audio.remove(&id);
+                        self.status = "Audio sharing disabled for this sample.".into();
+                    }
+                    Err(error) => self.status = error,
                 }
             }
             _ => return None,

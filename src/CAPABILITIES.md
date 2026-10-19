@@ -21,8 +21,12 @@ playback. The bundled Python worker performs local measurements only.
   authenticated loopback MCP and session-only API authentication. A supported
   Anthropic API key is required; consumer subscription login is not assumed.
 - App-owned conversation and activity survive restart. No queued mutation is replayed.
-- Local bounded audio import, waveform preview, playback, selected excerpts,
-  attenuation-only A/B matching, measurements and explicit summary attachments.
+- Local audio input capture (user-started, up to 60 seconds) from a selected
+  system input such as Axe-Fx USB audio or an interface. Multichannel inputs use
+  the first stereo pair. Captures join the recording lane for waveform preview,
+  playback, selected excerpts, attenuation-only A/B matching and local analysis.
+  Only summaries explicitly attached by the user are exposed to the agent; raw
+  recordings remain local.
 
 Hardware parameter mutations, hardware original restoration, verified device
 Save/reload, structural
