@@ -4,14 +4,15 @@ This local macOS experiment embeds an AppKit sidebar inside a separate copy of
 Axe-Edit III. The installed app is neither patched nor re-signed. The right pane
 contains native Objective-C++ chat connected to the installed Codex or Claude
 CLI through its existing local account login. No Rust helper or API-key entry
-is involved. Audio processing, preset context and AI knob control are not
-connected in this experiment.
+is involved. The agent can inspect the connected Axe-Fx and use scoped native
+controls to change parameters, bypass, channels and scenes. Audio processing
+is not connected.
 
 Run from the repository root:
 
 ```sh
-python3 experiments/embedded-sidebar/build.py --output .local/axe-edit-native-chat-r2
-open '.local/axe-edit-native-chat-r2/Axe-Edit III Chat.app'
+python3 experiments/embedded-sidebar/build.py --output .local/axe-edit-tone-agent
+open '.local/axe-edit-tone-agent/Axe-Edit III Chat.app'
 ```
 
 Choose a new output path for another build; the builder refuses to overwrite an
@@ -24,7 +25,7 @@ signature and runtime configuration. No system security setting is changed.
 The copied editor keeps Axe-Edit's ordinary device communications and may share
 the vendor's existing user preferences. A copied bundle is not a sandbox or a
 separate hardware session. The injected library opens no MIDI connection and
-has no parameter-write bridge. The local agents communicate with their normal
+uses the original editor controls for parameter changes. The local agents communicate with their normal
 services using their existing logins. Avoid running multiple editors against
 the device when testing editing behavior.
 
@@ -51,7 +52,8 @@ History and provider session IDs are stored separately per provider under
 `~/Library/Application Support/AxeStudioEmbeddedChat/{Codex,Claude}/conversation.json`.
 Conversation files use atomic writes and owner-only file permissions. Prompts
 travel through stdin, not process arguments or the layout log. The panel sends
-only entered chat messages; no preset, knob or audio context is attached.
+entered chat messages and the actual Axe-Edit context requested through its
+scoped tools. Audio is not attached.
 
 `ChatPanel.mm` owns AppKit controls. `ChatAgent.mm` implements the local-agent
 protocols, based on the existing Rust adapters in `src/crates/agents/`.
@@ -77,9 +79,9 @@ Run the focused native regression checks without launching the copied editor:
 ```sh
 xcrun clang -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/SelfTest.m -o .local/sidebar-layout-selftest
 .local/sidebar-layout-selftest
-xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/ChatAgentTest.mm -o .local/sidebar-chat-test
+xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/ChatAgentTest.mm experiments/embedded-sidebar/EditorTools.mm experiments/embedded-sidebar/MCPServer.mm -o .local/sidebar-chat-test
 .local/sidebar-chat-test
-xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/ChatPanelTest.mm experiments/embedded-sidebar/ChatAgent.mm -o .local/sidebar-chat-panel-test
+xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/ChatPanelTest.mm experiments/embedded-sidebar/ChatAgent.mm experiments/embedded-sidebar/EditorTools.mm experiments/embedded-sidebar/MCPServer.mm -o .local/sidebar-chat-panel-test
 .local/sidebar-chat-panel-test
 ```
 
@@ -90,6 +92,77 @@ account and use isolated temporary conversation directories:
 .local/sidebar-chat-test Codex
 .local/sidebar-chat-test Claude
 ```
+
+## Axe-Fx tone tools
+
+`EditorTools.mm` supplies the guitar-tone system prompt and seven tools:
+
+| Tool | Behavior |
+| --- | --- |
+| `axefx_inspect` | Read connected preset, scene, grid, selected effect/channel and visible numeric parameters |
+| `axefx_select_block` | Select an existing grid effect using its inspected label |
+| `axefx_set_parameter` | Change one visible numeric parameter with expected-value and context checks |
+| `axefx_set_bypass` | Set the selected block's bypass state |
+| `axefx_select_channel` | Select an existing A-D channel |
+| `axefx_select_scene` | Select one of the eight existing scene slots |
+| `axefx_name_scene` | Rename the current scene |
+
+A tone request authorizes changes to the current edit buffer. The prompt tells
+agents to inspect first, use observed controls, make small musical changes,
+read back results, and ask for playing feedback. Build scenes using the fixed
+eight slots, bypass states, channels and parameters. Parameter edits may affect
+other scenes that use the same block channel, following normal Axe-Fx behavior.
+
+The bridge serializes writes, rejects stale context and expected values, checks
+turn authority, and retains operation IDs to prevent duplicate writes. Stop
+revokes future tool actions immediately; it cannot undo a write already sent.
+The process-local operation ledger does not replay mutations on restart.
+
+Axe-Edit's custom knobs expose text labels rather than an AX slider setter.
+The bridge opens the observed label's numeric entry, verifies its existing text
+and location, replaces it through native text input, and commits the entry.
+Unknown bounds remain unknown; the original editor validates/clamps values.
+Results distinguish accepted sends from verified editor readback. The scope is
+`axe_edit_ui`; independent hardware getter and saved-preset persistence are not
+verified by this bridge.
+
+Effect model selection, block insertion/deletion, cable editing, preset Store,
+raw MIDI, global settings and firmware operations are unavailable. The model
+picker draws its rows without accessible model identities, so the agent cannot
+choose an unverified row by guessed coordinates. Use the original UI for these
+operations. Never run multiple editors against the device during editing tests.
+
+Codex receives native App Server dynamic tools. Claude receives only these tools
+through a bearer-authenticated loopback MCP endpoint; its token changes each
+turn, browser Origin requests are rejected, and the private configuration is
+removed on disconnect. No additional MIDI transport is opened.
+
+Additional focused checks:
+
+```sh
+xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/EditorToolsTest.mm experiments/embedded-sidebar/EditorTools.mm -o .local/editor-tools-test
+.local/editor-tools-test
+xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/MCPServerTest.mm experiments/embedded-sidebar/MCPServer.mm experiments/embedded-sidebar/EditorTools.mm -o .local/sidebar-mcp-test
+.local/sidebar-mcp-test
+.local/sidebar-chat-test Codex --tools
+.local/sidebar-chat-test Claude --tools
+```
+
+The last two checks use real local-agent logins and isolated temporary chat
+history. They call inspection with no editor attached and never mutate hardware.
+Fixture tests are not device evidence.
+
+## Device-tool acceptance, 2026-11-05
+
+| Check | Result |
+| --- | --- |
+| Native value parsing, stale/foreign context, Stop, disconnect, idempotency and numeric-entry identity checks | PASS, authored accessibility fixtures |
+| Loopback MCP authentication, Origin rejection, tool listing/call, main-thread dispatch and old-token rejection | PASS, local transport test |
+| Codex and Claude invoke the native inspection tool and resume chat | PASS, real local CLIs, no editor attached |
+| Connected preset/grid/scene/selected Amp numeric values | PASS, live Axe-Edit UI |
+| Parameter change and restoration through the local agent | Pending final live acceptance |
+| Scene/channel/bypass changes and scene naming | Pending final live acceptance |
+| Independent hardware value getter, saved persistence, x86_64 runtime | UNVERIFIED |
 
 ## Chat acceptance, 2026-11-05
 
@@ -104,7 +177,8 @@ account and use isolated temporary conversation directories:
 | Native pane Claude selection, connection and reply | PASS, visually and accessibility-verified `CLAUDE_PANEL_OK` |
 | Existing window geometry regression checks | PASS |
 | Live Stop timing and long sessions | UNVERIFIED; cancellation event rejection is covered by the focused native test |
-| Device context, AI knob writes, audio processing and audio sharing | NOT IMPLEMENTED |
+| Device context, AI knob writes | See the device-tool acceptance below |
+| Audio processing and audio sharing | NOT IMPLEMENTED |
 
 ## Observed acceptance, 2026-11-04
 

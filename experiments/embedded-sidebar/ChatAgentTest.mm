@@ -14,7 +14,8 @@ int main(int argc, const char **argv) {
         NSString *rootPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
             [@"axe-native-chat-test-" stringByAppendingString:NSUUID.UUID.UUIDString]];
         AxeChatAgent *agent = [[AxeChatAgent alloc] initWithStorageRoot:[NSURL fileURLWithPath:rootPath]];
-        if (argc == 2) {
+        if (argc >= 2) {
+            BOOL toolsMode=argc>=3 && strcmp(argv[2],"--tools")==0;
             NSString *provider = [NSString stringWithUTF8String:argv[1]];
             [agent connectProvider:provider];
             if (!waitFor(^{ return agent.ready || !agent.connected; }, 50) || !agent.ready) {
@@ -26,13 +27,19 @@ int main(int argc, const char **argv) {
             if (!waitFor(^{ return agent.ready || !agent.connected; }, 50) || !agent.ready) {
                 fprintf(stderr, "FAIL empty-session reconnect: %s\n", agent.status.UTF8String); [agent disconnect]; return 1;
             }
-            [agent send:@"This is an integration smoke test for the native Axe-Edit chat panel. Reply with exactly NATIVE_CHAT_OK and nothing else."];
+            [agent send:toolsMode ? @"Call axefx_inspect exactly once. Do not edit anything. Then reply with exactly TOOLS_INSPECT_OK." : @"This is an integration smoke test for the native Axe-Edit chat panel. Reply with exactly NATIVE_CHAT_OK and nothing else."];
             if (!waitFor(^{ return !agent.busy; }, 120)) {
                 fprintf(stderr, "FAIL: reply timeout\n"); [agent disconnect]; return 1;
             }
             BOOL found = NO;
             for (NSDictionary *entry in agent.messages)
-                if ([entry[@"role"] isEqual:@"assistant"] && [entry[@"text"] containsString:@"NATIVE_CHAT_OK"]) found = YES;
+                if ([entry[@"role"] isEqual:@"assistant"] && [entry[@"text"] containsString:toolsMode ? @"TOOLS_INSPECT_OK" : @"NATIVE_CHAT_OK"]) found = YES;
+            if(toolsMode) {
+                BOOL toolCalled=NO;
+                for(NSDictionary *entry in agent.messages)if([entry[@"role"] isEqual:@"tool"] && [entry[@"text"] hasPrefix:@"axefx_inspect:"] && [entry[@"tool_result"][@"ok"] boolValue])toolCalled=YES;
+                if(!toolCalled){fprintf(stderr,"FAIL: real agent did not invoke the inspection tool\n");[agent disconnect];return 1;}
+                printf("PASS: local %s invoked the native inspection tool (no editor attached, no mutations)\n",provider.UTF8String);
+            }
             if (!found) {
                 fprintf(stderr, "FAIL reply: %s\n", agent.status.UTF8String);
                 for (NSDictionary *entry in agent.messages) if ([entry[@"role"] isEqual:@"assistant"])
@@ -65,7 +72,16 @@ int main(int argc, const char **argv) {
         [agent claudeEvent:@{@"type":@"result",@"is_error":@NO,@"result":@"Claude reply"}];
         assert(agent.messages.count == 2 && agent.receivedResult);
         assert([agent.messages[1][@"text"] isEqual:@"Claude reply"]);
-        printf("PASS: Codex/Claude streaming, final deduplication, foreign-thread rejection and stopped-delta rejection\n");
+        agent.provider=@"Codex";agent.session=@"tool-thread";agent.turn=@"tool-turn";agent.busy=YES;agent.ready=YES;agent.stopping=NO;
+        NSUInteger count=agent.messages.count;
+        [agent codexEvent:@{@"id":@100,@"method":@"item/tool/call",@"params":@{@"threadId":@"foreign",@"turnId":@"tool-turn",@"tool":@"axefx_inspect",@"arguments":@{}}}];
+        assert(agent.messages.count==count);
+        [agent codexEvent:@{@"id":@101,@"method":@"item/tool/call",@"params":@{@"threadId":@"tool-thread",@"turnId":@"tool-turn",@"tool":@"axefx_inspect",@"arguments":@{}}}];
+        assert(agent.messages.count==count+1 && [agent.messages.lastObject[@"role"] isEqual:@"tool"]);
+        agent.stopping=YES;
+        [agent codexEvent:@{@"id":@102,@"method":@"item/tool/call",@"params":@{@"threadId":@"tool-thread",@"turnId":@"tool-turn",@"tool":@"axefx_inspect",@"arguments":@{}}}];
+        assert(agent.messages.count==count+1);
+        printf("PASS: Codex/Claude streaming, final deduplication, foreign-thread rejection stopped-delta rejection and active-turn tool authorization\n");
     }
     return 0;
 }

@@ -19,6 +19,7 @@ root = Path(__file__).resolve().parents[2]
 source = Path('/Applications/Axe-Edit III.app')
 parser = argparse.ArgumentParser()
 parser.add_argument('--output', type=Path, default=root / '.local/axe-edit-native-chat')
+parser.add_argument('--bundle-id', default='org.axestudio.axe-edit-chat')
 args = parser.parse_args()
 destination = args.output.resolve()
 if destination.exists():
@@ -36,6 +37,7 @@ run('xcrun', 'clang++', '-dynamiclib', '-fobjc-arc', '-fblocks', '-std=c++17', '
     '-arch', 'arm64', '-arch', 'x86_64', '-mmacosx-version-min=12.0',
     '-framework', 'Cocoa', str(Path(__file__).with_name('Sidebar.m')),
     str(Path(__file__).with_name('ChatAgent.mm')), str(Path(__file__).with_name('ChatPanel.mm')),
+    str(Path(__file__).with_name('EditorTools.mm')), str(Path(__file__).with_name('MCPServer.mm')),
     '-o', str(library))
 # A launcher sets the library path only for the copied executable.
 binary.write_text('''#!/bin/sh
@@ -46,7 +48,7 @@ exec "$AXE_PROOF_MACOS_DIR/Axe-Edit III Original" "$@"
 binary.chmod(0o755)
 info = app / 'Contents/Info.plist'
 metadata = plistlib.loads(info.read_bytes())
-metadata['CFBundleIdentifier'] = 'org.axestudio.axe-edit-chat'
+metadata['CFBundleIdentifier'] = args.bundle_id
 metadata['CFBundleName'] = 'Axe-Edit III Chat'
 metadata['CFBundleDisplayName'] = 'Axe-Edit III Chat'
 info.write_bytes(plistlib.dumps(metadata))
@@ -60,7 +62,7 @@ if before != after:
     raise SystemExit('Installed binary identity unexpectedly changed')
 manifest = {'app': str(app), 'installed_binary_sha256': before,
             'installed_binary_unchanged': before == after,
-            'purpose': 'Native embedded chat using local Codex/Claude agents; no device-control or audio bridge',
+            'purpose': 'Native local-agent chat with scoped Axe-Edit edit-buffer controls; no audio bridge or preset store',
             'note': 'Axe-Edit itself retains its normal device communication and user preferences.'}
 (destination / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
 print(json.dumps(manifest, indent=2))

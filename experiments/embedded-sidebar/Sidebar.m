@@ -3,6 +3,7 @@
 #import <Cocoa/Cocoa.h>
 #ifndef AXE_SIDEBAR_SELF_TEST
 #import "ChatPanel.h"
+#import "EditorTools.h"
 #endif
 #import <objc/runtime.h>
 #include <dlfcn.h>
@@ -164,6 +165,9 @@ static BOOL attach(void) {
             window.contentView.bounds.size.width < 100) continue;
         if ([window.contentView isKindOfClass:AxeSidebarHost.class]) return YES;
         NSView *editor = window.contentView;
+#ifndef AXE_SIDEBAR_SELF_TEST
+        [AxeEditorTools shared].editor=editor;
+#endif
         Dl_info editorImage = {0};
         dladdr((void *)class_getMethodImplementation(object_getClass(editor), @selector(mouseDown:)), &editorImage);
         editorImageBase = editorImage.dli_fbase;

@@ -30,7 +30,7 @@ static NSTextField *caption(NSString *text, CGFloat size) {
         self.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         _agent = [AxeChatAgent new];
         _titleLabel = caption(@"Tone assistant", 21);
-        _subtitle = caption(@"Local agent · chat only", 11);
+        _subtitle = caption(@"Axe-Fx tone agent · device tools", 11);
         _subtitle.textColor = NSColor.secondaryLabelColor;
         _provider = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
         [_provider addItemsWithTitles:@[@"Codex", @"Claude"]];
@@ -116,12 +116,12 @@ static NSTextField *caption(NSString *text, CGFloat size) {
     self.statusLabel.stringValue = self.agent.status;
     NSMutableString *text = [NSMutableString string];
     for (NSDictionary *entry in self.agent.messages) {
-        NSString *role = [entry[@"role"] isEqual:@"user"] ? @"You" : self.provider.titleOfSelectedItem;
+        NSString *role = [entry[@"role"] isEqual:@"user"] ? @"You" : ([entry[@"role"] isEqual:@"tool"] ? @"Axe-Fx tool" : self.provider.titleOfSelectedItem);
         [text appendFormat:@"%@\n%@\n", role, entry[@"text"] ?: @""];
         if ([entry[@"status"] isEqual:@"interrupted"]) [text appendString:@"[Interrupted]\n"];
         [text appendString:@"\n"];
     }
-    if (!text.length) [text appendString:@"Connect your installed local agent, then write a message below.\n\nEditor context, knob control and audio are not connected yet."];
+    if (!text.length) [text appendString:@"Connect your local agent and describe the guitar tone or scene you want.\n\nThe agent inspects the connected Axe-Fx through Axe-Edit before making supported edits. Preset Save remains manual."];
     self.history.string = text;
     [self resizeSubviewsWithOldSize:self.bounds.size];
     [self.history scrollRangeToVisible:NSMakeRange(self.history.string.length, 0)];

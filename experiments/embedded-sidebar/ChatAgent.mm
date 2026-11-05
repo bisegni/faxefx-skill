@@ -1,8 +1,9 @@
 // Native local-agent transport. Protocol reference: src/crates/agents/.
 #import "ChatAgent.h"
+#import "EditorTools.h"
+#import "MCPServer.h"
 #include <sys/stat.h>
 
-static NSString *instructions = @"You are the musical assistant in the embedded Axe-Edit chat sidebar. This integration currently supports conversation only. You cannot see the preset, read knobs, change device parameters, hear audio, or control the editor. Explain these limits when relevant. Never claim an action or observation that did not occur. Do not use tools, commands, files, connectors, web, or delegated agents. Help the user discuss guitar tones and plan changes. Respond clearly and concisely.";
 static NSArray<NSString *> *disabledFeatures(void) {
     return @[@"shell_tool", @"unified_exec", @"code_mode", @"multi_agent", @"multi_agent_v2",
         @"apps", @"plugins", @"hooks", @"browser_use", @"computer_use", @"image_generation", @"request_permissions_tool"];
@@ -30,6 +31,10 @@ static NSArray<NSString *> *disabledFeatures(void) {
 @property(nonatomic, copy) NSString *claudeMessageID;
 @property(nonatomic, copy) NSDictionary *threadParams;
 @property(nonatomic, strong) NSNumber *resumeRequestID;
+@property(nonatomic, strong) AxeMCPServer *mcp;
+@property(nonatomic, strong) NSURL *mcpConfig;
+@property(nonatomic) NSUInteger toolEpoch;
+@property(nonatomic) NSUInteger toolCount;
 @end
 
 @implementation AxeChatAgent
@@ -61,7 +66,7 @@ static NSArray<NSString *> *disabledFeatures(void) {
 }
 - (void)persist {
     if (!self.directory) return;
-    NSDictionary *state = @{@"version":@1, @"provider":self.provider, @"session":self.session ?: @"", @"messages":self.entries};
+    NSDictionary *state = @{@"version":@3, @"provider":self.provider, @"session":self.session ?: @"", @"messages":self.entries};
     NSData *data = [NSJSONSerialization dataWithJSONObject:state options:0 error:nil];
     NSURL *file = [self.directory URLByAppendingPathComponent:@"conversation.json"];
     NSError *error = nil;
@@ -184,6 +189,9 @@ static NSArray<NSString *> *disabledFeatures(void) {
         }
     }
     self.session = [state isKindOfClass:NSDictionary.class] && [state[@"session"] isKindOfClass:NSString.class] ? state[@"session"] : nil;
+    // Start a new agent session on the tool-enabled protocol upgrade. Retain
+    // the local transcript, rather than resuming a chat-only tool contract.
+    if(![state[@"version"] isEqual:@3]) self.session=nil;
     self.connected = YES; self.busy = YES; self.ready = NO;
     self.status = [NSString stringWithFormat:@"Connecting to local %@…", self.provider]; [self notify];
     if ([self.provider isEqual:@"Codex"]) [self connectCodex];
@@ -221,8 +229,11 @@ static NSArray<NSString *> *disabledFeatures(void) {
                     for (NSDictionary *cwd in listed[@"data"]) for (NSDictionary *skill in cwd[@"skills"])
                         if ([skill[@"path"] isKindOfClass:NSString.class]) [skills addObject:@{@"path":skill[@"path"], @"enabled":@NO}];
                     config[@"skills.config"] = skills;
+                    NSMutableArray *tools=[NSMutableArray array];
+                    for(NSDictionary *spec in [AxeEditorTools specifications]) {NSMutableDictionary *tool=[spec mutableCopy];tool[@"type"]=@"function";[tools addObject:tool];}
+                    NSString *instructions=[AxeEditorTools systemPrompt];
                     NSMutableDictionary *params = [@{@"cwd":weakSelf.directory.path, @"sandbox":@"read-only", @"approvalPolicy":@"never", @"config":config,
-                        @"environments":@[], @"dynamicTools":@[], @"baseInstructions":instructions, @"developerInstructions":instructions} mutableCopy];
+                        @"environments":@[], @"dynamicTools":tools, @"baseInstructions":instructions, @"developerInstructions":instructions} mutableCopy];
                     BOOL resume = weakSelf.session.length > 0;
                     if (resume) { params[@"threadId"] = weakSelf.session; params[@"excludeTurns"] = @YES; }
                     weakSelf.threadParams = params;
@@ -259,7 +270,17 @@ static NSArray<NSString *> *disabledFeatures(void) {
         return;
     }
     if (value[@"id"] && value[@"method"]) {
-        [self write:@{@"id":value[@"id"], @"error":@{@"code":@(-32601), @"message":@"No host tools or approvals in chat-only mode"}}]; return;
+        NSDictionary *params=value[@"params"];
+        if([value[@"method"] isEqual:@"item/tool/call"] && [params[@"threadId"] isEqual:self.session] && [params[@"turnId"] isEqual:self.turn]) {
+            NSUInteger generation=self.generation;
+            __weak AxeChatAgent *weakSelf=self;
+            [self invokeTool:params[@"tool"] arguments:params[@"arguments"] extraAuthority:^BOOL{return YES;} reply:^(NSDictionary *result) {
+                if(weakSelf.generation!=generation)return;
+                NSString *text=[[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:result options:0 error:nil] encoding:NSUTF8StringEncoding];
+                [weakSelf write:@{@"id":value[@"id"],@"result":@{@"success":@([result[@"ok"] boolValue]),@"contentItems":@[@{@"type":@"inputText",@"text":text ?: @"Tool failed"}]}}];
+            }];
+        } else [self write:@{@"id":value[@"id"], @"error":@{@"code":@(-32601), @"message":@"Unknown tool, inactive turn or unavailable approval"}}];
+        return;
     }
     NSString *method = value[@"method"];
     NSDictionary *params = value[@"params"];
@@ -287,8 +308,24 @@ static NSArray<NSString *> *disabledFeatures(void) {
         loggedIn = [value[@"loggedIn"] isEqual:@YES] && [value[@"authMethod"] isEqual:@"claude.ai"];
     } ended:^(int code) {
         if (code != 0 || !loggedIn) { [weakSelf fail:@"Sign in using claude auth login, then reconnect."]; return; }
+        if(![weakSelf configureMCP])return;
         weakSelf.ready = YES; weakSelf.busy = NO; weakSelf.status = @"Connected to local Claude"; [weakSelf notify];
     }];
+}
+- (BOOL)configureMCP {
+    [self.mcp stop];
+    if(self.mcpConfig)[NSFileManager.defaultManager removeItemAtURL:self.mcpConfig error:nil];
+    __weak AxeChatAgent *weakSelf=self;
+        self.mcp=[AxeMCPServer new];NSError *error=nil;
+        if(![self.mcp startWithHandler:^(NSString *name,NSDictionary *args,AxeToolAuthority authority,AxeToolReply reply) {
+            [weakSelf invokeTool:name arguments:args extraAuthority:authority reply:reply];
+        } error:&error]) {[self fail:error.localizedDescription];return NO;}
+        self.mcpConfig=[self.directory URLByAppendingPathComponent:[NSString stringWithFormat:@"tools-%@.json",NSUUID.UUID.UUIDString]];
+        NSDictionary *config=@{@"mcpServers":@{@"axe_edit":@{@"type":@"http",@"url":self.mcp.url,@"headers":@{@"Authorization":[@"Bearer " stringByAppendingString:self.mcp.token]}}}};
+        NSData *data=[NSJSONSerialization dataWithJSONObject:config options:0 error:nil];
+        if(![data writeToURL:self.mcpConfig options:NSDataWritingAtomic error:&error]) {[self fail:@"Cannot write private local tool configuration"];return NO;}
+        chmod(self.mcpConfig.fileSystemRepresentation,0600);
+    return YES;
 }
 - (void)send:(NSString *)text {
     text = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -296,6 +333,7 @@ static NSArray<NSString *> *disabledFeatures(void) {
     NSMutableDictionary *entry = [self entry:NSUUID.UUID.UUIDString role:@"user"];
     entry[@"text"] = text; entry[@"status"] = @"submitted";
     self.busy = YES; self.stopping = NO; self.status = @"Thinking…"; [self persist]; [self notify];
+    self.toolEpoch++;self.toolCount=0;
     __weak AxeChatAgent *weakSelf = self;
     if ([self.provider isEqual:@"Codex"]) {
         [self request:@"turn/start" params:@{@"threadId":self.session, @"input":@[@{@"type":@"text", @"text":text}]} reply:^(NSDictionary *result) {
@@ -303,10 +341,15 @@ static NSArray<NSString *> *disabledFeatures(void) {
             if (weakSelf.stopping && weakSelf.turn) [weakSelf stop];
         }];
     } else {
+        // Each Claude turn gets fresh loopback authority, so a stopped or old
+        // child cannot reuse its bearer token during a later turn.
+        if(![self configureMCP])return;
         self.claudeMessageID = NSUUID.UUID.UUIDString; self.receivedResult = NO;
         NSMutableArray *args = [NSMutableArray arrayWithArray:@[@"--restricted", @"--print", @"--verbose", @"--output-format", @"stream-json", @"--include-partial-messages",
-            @"--tools", @"", @"--strict-mcp-config", @"--mcp-config", @"{\"mcpServers\":{}}", @"--setting-sources", @"", @"--disable-slash-commands",
-            @"--settings", @"{\"disableAllHooks\":true}", @"--permission-mode", @"dontAsk", @"--permission-prompts", @"none", @"--no-chrome", @"--max-turns", @"1", @"--system-prompt", instructions]];
+            @"--tools", @"", @"--strict-mcp-config", @"--mcp-config", self.mcpConfig.path, @"--setting-sources", @"", @"--disable-slash-commands",
+            @"--settings", @"{\"disableAllHooks\":true}", @"--permission-mode", @"dontAsk", @"--permission-prompts", @"none", @"--no-chrome", @"--max-turns", @"12", @"--system-prompt-snapshot", @"off", @"--system-prompt", [AxeEditorTools systemPrompt]]];
+        NSMutableArray *allowed=[NSMutableArray array];for(NSDictionary *spec in [AxeEditorTools specifications]) [allowed addObject:[@"mcp__axe_edit__" stringByAppendingString:spec[@"name"]]];
+        [args addObjectsFromArray:@[@"--allowedTools",[allowed componentsJoinedByString:@","]]];
         if (self.session.length) [args addObjectsFromArray:@[@"--resume", self.session]];
         [self launch:args line:^(NSDictionary *value) { [weakSelf claudeEvent:value]; } ended:^(int code) {
             if (weakSelf.stopping) weakSelf.status = @"Stopped · partial reply retained";
@@ -336,6 +379,7 @@ static NSArray<NSString *> *disabledFeatures(void) {
 - (void)stop {
     if (!self.busy) return;
     if (!self.ready) { [self disconnect]; return; }
+    self.toolEpoch++;
     self.stopping = YES; self.status = @"Stopping…"; [self notify];
     for (NSMutableDictionary *entry in self.entries) if ([entry[@"status"] isEqual:@"streaming"]) entry[@"status"] = @"interrupted";
     if ([self.provider isEqual:@"Codex"]) {
@@ -344,6 +388,9 @@ static NSArray<NSString *> *disabledFeatures(void) {
     [self persist];
 }
 - (void)disconnect {
+    self.toolEpoch++;
+    [self.mcp stop];self.mcp=nil;
+    if(self.mcpConfig) [NSFileManager.defaultManager removeItemAtURL:self.mcpConfig error:nil];self.mcpConfig=nil;
     self.generation++;
     [self.pending removeAllObjects];
     NSTask *task = self.task; self.task = nil;
@@ -357,7 +404,27 @@ static NSArray<NSString *> *disabledFeatures(void) {
     self.status = @"Disconnected · conversation saved locally"; [self notify];
 }
 - (void)dealloc {
+    [self.mcp stop];
+    if(self.mcpConfig) [NSFileManager.defaultManager removeItemAtURL:self.mcpConfig error:nil];
     @try { [self.input closeFile]; } @catch (NSException *exception) {}
     if (self.task.running) [self.task terminate];
+}
+- (void)invokeTool:(NSString *)name arguments:(NSDictionary *)arguments extraAuthority:(AxeToolAuthority)extra reply:(AxeToolReply)reply {
+    if(![name isKindOfClass:NSString.class] || ![arguments isKindOfClass:NSDictionary.class] || !self.ready || !self.busy || self.stopping || !extra()) {reply(@{@"ok":@NO,@"error":@"No active guitar-tone turn or tool authority revoked"});return;}
+    if(++self.toolCount>32) {reply(@{@"ok":@NO,@"error":@"Tool limit reached for this turn. Summarize results and ask the user to listen."});return;}
+    NSUInteger epoch=self.toolEpoch,generation=self.generation;
+    NSMutableDictionary *args=[arguments mutableCopy];
+    if([args[@"operation_id"] isKindOfClass:NSString.class]) args[@"operation_id"]=[NSString stringWithFormat:@"%@/%@",self.session ?: self.provider,args[@"operation_id"]];
+    __weak AxeChatAgent *weakSelf=self;
+    [[AxeEditorTools shared] call:name arguments:args authority:^BOOL {
+        return weakSelf && weakSelf.generation==generation && weakSelf.toolEpoch==epoch && weakSelf.busy && !weakSelf.stopping && extra();
+    } reply:^(NSDictionary *result) {
+        if(weakSelf.generation==generation) {
+            NSMutableDictionary *entry=[weakSelf entry:NSUUID.UUID.UUIDString role:@"tool"];
+            entry[@"text"]=[NSString stringWithFormat:@"%@: %@",name,result[@"status"] ?: result[@"error"] ?: ([result[@"ok"] boolValue] ? @"inspected" : @"failed")];
+            entry[@"status"]=@"complete";entry[@"tool_result"]=result;[weakSelf persist];[weakSelf notify];
+        }
+        reply(result);
+    }];
 }
 @end
