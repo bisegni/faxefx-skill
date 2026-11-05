@@ -1,18 +1,21 @@
-# Embedded Axe-Edit sidebar proof
+# Embedded Axe-Edit chat
 
 This local macOS experiment embeds an AppKit sidebar inside a separate copy of
-Axe-Edit III. The installed app is neither patched nor re-signed. This is a
-layout and focus proof; chat, audio processing, and AI parameter control are not
-implemented here.
+Axe-Edit III. The installed app is neither patched nor re-signed. The right pane
+contains native Objective-C++ chat connected to the installed Codex or Claude
+CLI through its existing local account login. No Rust helper or API-key entry
+is involved. Audio processing, preset context and AI knob control are not
+connected in this experiment.
 
 Run from the repository root:
 
 ```sh
-python3 experiments/embedded-sidebar/build.py --output .local/axe-edit-sidebar-layout-v8
-open '.local/axe-edit-sidebar-layout-v8/Axe-Edit III Sidebar Proof.app'
+python3 experiments/embedded-sidebar/build.py --output .local/axe-edit-native-chat-r2
+open '.local/axe-edit-native-chat-r2/Axe-Edit III Chat.app'
 ```
 
-The builder refuses to overwrite an existing output directory. It compiles a
+Choose a new output path for another build; the builder refuses to overwrite an
+existing output directory. It compiles a
 universal arm64/x86_64 library, copies the installed app, adds a local launcher,
 and applies ad-hoc signatures to the copy. The copy omits the vendor's hardened
 runtime configuration to load this library. The installed app keeps its original
@@ -20,16 +23,46 @@ signature and runtime configuration. No system security setting is changed.
 
 The copied editor keeps Axe-Edit's ordinary device communications and may share
 the vendor's existing user preferences. A copied bundle is not a sandbox or a
-separate hardware session. The injected library itself has no MIDI, network,
-provider, or parameter-write code. Avoid running multiple editors against the
-device when testing editing behavior.
+separate hardware session. The injected library opens no MIDI connection and
+has no parameter-write bridge. The local agents communicate with their normal
+services using their existing logins. Avoid running multiple editors against
+the device when testing editing behavior.
+
+## Chat
+
+Choose **Codex** or **Claude**, then **Connect**. Enter a message and click
+**Send**. **Stop** interrupts a running reply. **Disconnect** releases the local
+agent; reconnecting resumes its saved conversation. Provider switching requires
+disconnecting first. Codex uses App Server over stdio; Claude uses the local
+authenticated CLI with streaming JSON output. An empty Codex session that has
+no saved rollout starts afresh on reconnect; nonempty history is retained if
+the remote session cannot be resumed.
+
+Install and sign in to the desired CLI before connecting (`codex login` or
+`claude auth login`). Tested runtimes are Codex 0.166.0 and Claude Code 2.1.318.
+This panel removes inherited API-key variables from child environments, keeps
+the local login, and strips the sidebar's injected-library variables from those
+children. Codex built-in tools are disabled and verified; other MCP servers and
+skills are disabled for the conversation. Claude runs restricted, with built-in
+tools, hooks, slash commands and unrelated MCP configuration disabled. These
+controls apply only to the child sessions; user settings are not rewritten.
+
+History and provider session IDs are stored separately per provider under
+`~/Library/Application Support/AxeStudioEmbeddedChat/{Codex,Claude}/conversation.json`.
+Conversation files use atomic writes and owner-only file permissions. Prompts
+travel through stdin, not process arguments or the layout log. The panel sends
+only entered chat messages; no preset, knob or audio context is attached.
+
+`ChatPanel.mm` owns AppKit controls. `ChatAgent.mm` implements the local-agent
+protocols, based on the existing Rust adapters in `src/crates/agents/`.
 
 The host wraps the original JUCE native view and reserves 300 points for an
 AppKit sidebar. **Hide sidebar** reduces it to a 36-point toggle strip. Window
 resizing uses the original editor's bottom-right resize grip, which moves with
 the editor area. Toggling preserves the editor's dimensions and changes the
 window width. The host accounts separately for the editor's 4:3 constraint and
-the sidebar width. The placeholder field sends nothing.
+the sidebar width. Chat remains available when Axe-Edit is disconnected from
+the hardware.
 
 The initial wrapper had a resize feedback loop. The v2 experiment also crashed
 while dragging because its superclass lookup recursively called the injected
@@ -44,7 +77,34 @@ Run the focused native regression checks without launching the copied editor:
 ```sh
 xcrun clang -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/SelfTest.m -o .local/sidebar-layout-selftest
 .local/sidebar-layout-selftest
+xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/ChatAgentTest.mm -o .local/sidebar-chat-test
+.local/sidebar-chat-test
+xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/ChatPanelTest.mm experiments/embedded-sidebar/ChatAgent.mm -o .local/sidebar-chat-panel-test
+.local/sidebar-chat-panel-test
 ```
+
+Optional live checks, which send one fixed smoke-test message using the local
+account and use isolated temporary conversation directories:
+
+```sh
+.local/sidebar-chat-test Codex
+.local/sidebar-chat-test Claude
+```
+
+## Chat acceptance, 2026-11-05
+
+| Check | Result |
+| --- | --- |
+| Universal Objective-C++ build and copied bundle signature verification | PASS |
+| Native stream/final deduplication, wrong-thread rejection, stopped-delta rejection | PASS |
+| Composer and transcript widths at compact and normal sizes | PASS |
+| Local Codex login, reply, disconnect, empty-session recovery and saved resume | PASS, live CLI |
+| Local Claude login, reply, disconnect and saved resume | PASS, live CLI |
+| Native pane Codex connection and reply | PASS, visually and accessibility-verified `PANEL_CHAT_OK` |
+| Native pane Claude selection, connection and reply | PASS, visually and accessibility-verified `CLAUDE_PANEL_OK` |
+| Existing window geometry regression checks | PASS |
+| Live Stop timing and long sessions | UNVERIFIED; cancellation event rejection is covered by the focused native test |
+| Device context, AI knob writes, audio processing and audio sharing | NOT IMPLEMENTED |
 
 ## Observed acceptance, 2026-11-04
 
@@ -67,7 +127,7 @@ Tested with installed Axe-Edit III 1.15.03 on arm64 macOS:
 | Installed executable unchanged | PASS, SHA-256 below |
 | AI or programmatic knob writes | UNVERIFIED; not attempted |
 | Hardware value readback after an edit | UNVERIFIED; not attempted |
-| Connected chat/audio backend | NOT IMPLEMENTED |
+| Connected chat/audio backend in the initial layout proof | NOT IMPLEMENTED at that stage; chat is implemented above |
 | x86_64 runtime, full screen, dialogs, long sessions | UNVERIFIED |
 
 Installed executable SHA-256:

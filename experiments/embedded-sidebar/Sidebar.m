@@ -1,6 +1,9 @@
-// Local proof only: an AppKit sidebar in a separately signed Axe-Edit copy.
-// No MIDI, network, preset edits, or provider calls.
+// Embedded AppKit sidebar in a separately signed Axe-Edit copy.
+// Local-agent chat is isolated from device control and MIDI.
 #import <Cocoa/Cocoa.h>
+#ifndef AXE_SIDEBAR_SELF_TEST
+#import "ChatPanel.h"
+#endif
 #import <objc/runtime.h>
 #include <dlfcn.h>
 
@@ -41,7 +44,7 @@ static IMP savedConstraint(id self, SEL selector) {
     for (Class cls = object_getClass(self); cls; cls = class_getSuperclass(cls)) {
         NSString *key = [NSString stringWithFormat:@"%@/%@", NSStringFromClass(cls), NSStringFromSelector(selector)];
         NSValue *saved = originalConstraints[key];
-        if (saved) return saved.pointerValue;
+        if (saved) return (IMP)saved.pointerValue;
     }
     return NULL;
 }
@@ -93,7 +96,7 @@ static void installWindowTranslation(NSWindow *window, AxeSidebarHost *host) {
     NSValue *saved = originalFrameRects[name];
     if (!saved) {
         Method method = class_getInstanceMethod(parent, @selector(frameRectForContentRect:));
-        saved = [NSValue valueWithPointer:method_getImplementation(method)];
+        saved = [NSValue valueWithPointer:(const void *)method_getImplementation(method)];
         originalFrameRects[name] = saved;
         // Preserve the existing isa/KVO chain. Replacing the object's class can
         // invalidate AppKit's observation bookkeeping during drag or teardown.
@@ -108,7 +111,7 @@ static void installWindowTranslation(NSWindow *window, AxeSidebarHost *host) {
         NSString *key = [NSString stringWithFormat:@"%@/%@", name, selectorName];
         Method method = class_getInstanceMethod(parent, selector);
         if (method && !originalConstraints[key]) {
-            originalConstraints[key] = [NSValue valueWithPointer:method_getImplementation(method)];
+            originalConstraints[key] = [NSValue valueWithPointer:(const void *)method_getImplementation(method)];
             class_replaceMethod(parent, selector,
                 selector == @selector(constrainFrameRect:toScreen:) ? (IMP)sidebarConstrainRect : (IMP)sidebarWillResize,
                 method_getTypeEncoding(method));
@@ -126,6 +129,8 @@ static void installWindowTranslation(NSWindow *window, AxeSidebarHost *host) {
     self.editor.frame = NSMakeRect(0, 0, MAX(1, bounds.size.width - width), bounds.size.height);
     self.sidebar.frame = NSMakeRect(bounds.size.width - width, 0, width, bounds.size.height);
     self.toggle.frame = NSMakeRect(5, bounds.size.height - 40, width - 10, 28);
+    for (NSView *view in self.sidebar.subviews) if (view != self.toggle)
+        view.frame = NSMakeRect(0, 0, width, MAX(1, bounds.size.height - 48));
     record([NSString stringWithFormat:@"layout editor=%@ sidebar=%@",
         NSStringFromRect(self.editor.frame), NSStringFromRect(self.sidebar.frame)]);
     self.layingOut = NO;
@@ -153,15 +158,6 @@ static void installWindowTranslation(NSWindow *window, AxeSidebarHost *host) {
 }
 @end
 
-static NSTextField *label(NSString *value, CGFloat size, NSRect frame) {
-    NSTextField *field = [NSTextField wrappingLabelWithString:value];
-    field.font = [NSFont systemFontOfSize:size];
-    field.textColor = NSColor.labelColor;
-    field.frame = frame;
-    field.autoresizingMask = NSViewMinYMargin;
-    return field;
-}
-
 static BOOL attach(void) {
     for (NSWindow *window in NSApp.windows) {
         if (![window.title containsString:@"Axe-Edit III"] || !window.visible ||
@@ -187,14 +183,9 @@ static BOOL attach(void) {
         toggle.bezelStyle = NSBezelStyleRounded;
         host.toggle = toggle;
         [sidebar addSubview:toggle];
-        [sidebar addSubview:label(@"Chat + Audio", 22, NSMakeRect(20, bounds.size.height - 100, 260, 35))];
-        [sidebar addSubview:label(@"Embedded sidebar proof", 13, NSMakeRect(20, bounds.size.height - 135, 260, 25))];
-        [sidebar addSubview:label(@"The original Axe-Edit editor is on the left.\n\nThis panel currently tests layout, resizing and keyboard focus only. Chat and audio are not connected.", 14,
-            NSMakeRect(20, bounds.size.height - 330, 260, 175))];
-        NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(20, bounds.size.height - 390, 260, 34)];
-        input.placeholderString = @"Type here to test focus";
-        input.autoresizingMask = NSViewMinYMargin;
-        [sidebar addSubview:input];
+#ifndef AXE_SIDEBAR_SELF_TEST
+        [sidebar addSubview:[[AxeChatPanel alloc] initWithFrame:NSMakeRect(0, 0, 300, bounds.size.height - 48)]];
+#endif
         // Retain the original view before replacing contentView; JUCE still owns its peer.
         installWindowTranslation(window, host);
         record([NSString stringWithFormat:@"native aspect=%@ contentAspect=%@",
