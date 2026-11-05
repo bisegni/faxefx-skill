@@ -43,8 +43,8 @@ impl Layout {
                 Layout::Pane { pane } => {
                     let (mw, mh) = match pane {
                         Pane::Presets => (240., 160.),
-                        Pane::Inspector => (240., 220.),
-                        Pane::Routing => (440., 300.),
+                        Pane::Inspector => (240., 200.),
+                        Pane::Routing => (440., 260.),
                         Pane::Chat => (300., 400.),
                         Pane::Audio => (400., 170.),
                     };

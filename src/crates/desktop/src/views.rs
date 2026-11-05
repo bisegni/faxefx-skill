@@ -135,74 +135,34 @@ impl Studio {
                 if let Some(b) = selected {
                     let registry = crate::effects::EffectWidgetRegistry::default();
                     let family = registry.presentation(&b.family);
-                    body = body
-                        .push(
-                            container(
-                                row![
-                                    text(family.icon).color(family.accent).size(15),
-                                    heading(&b.label),
-                                    space::horizontal(),
-                                    text("◉").color(style::MUTED)
-                                ]
-                                .spacing(10)
-                                .align_y(iced::Center),
-                            )
-                            .padding(10)
-                            .style(style::inset),
-                        )
-                        .push(
-                            row![
-                                label("Channel"),
-                                space::horizontal(),
-                                badge(
-                                    self.snapshot
-                                        .as_ref()
-                                        .and_then(|s| b.channel.or(s.context.channel))
-                                        .map(|v| ((b'A' + v) as char).to_string())
-                                        .unwrap_or("Unknown".into()),
-                                    style::BLUE
-                                )
-                            ]
-                            .align_y(iced::Center),
-                        )
-                        .push(
-                            row![
-                                label("Type"),
-                                space::horizontal(),
-                                badge(
-                                    b.type_name.as_deref().unwrap_or("Unknown type"),
-                                    if b.type_name.is_some() {
-                                        family.accent
-                                    } else {
-                                        style::MUTED
-                                    }
-                                )
-                            ]
-                            .align_y(iced::Center),
-                        )
-                        .push(
-                            row![
-                                label("Instance"),
-                                space::horizontal(),
-                                badge(
-                                    b.instance_id
-                                        .map(|id| format!("{} · {id}", b.id))
-                                        .unwrap_or_else(|| b.id.clone()),
-                                    style::MUTED
-                                )
-                            ]
-                            .align_y(iced::Center),
-                        )
-                        .push(iced::widget::rule::horizontal(1))
-                        .push(label(if b.parameters.is_empty() {
-                            "Live parameters · unavailable"
-                        } else {
-                            "Live parameters · device readback"
-                        }));
+                    body = body.push(
+                        row![
+                            text(family.icon).color(family.accent).size(15),
+                            heading(&b.label),
+                            badge(
+                                b.type_name.as_deref().unwrap_or("Unknown type"),
+                                family.accent,
+                            ),
+                            space::horizontal(),
+                            label("Channel"),
+                            badge(
+                                self.snapshot
+                                    .as_ref()
+                                    .and_then(|s| b.channel.or(s.context.channel))
+                                    .map(|v| ((b'A' + v) as char).to_string())
+                                    .unwrap_or("Unknown".into()),
+                                style::BLUE,
+                            ),
+                        ]
+                        .spacing(10)
+                        .align_y(iced::Center),
+                    );
+                    let mut controls = row![].spacing(12);
                     for p in &b.parameters {
-                        body = body.push(
+                        let mut parameter_control = column![].spacing(6);
+                        parameter_control = parameter_control.push(
                             iced::widget::Sensor::new(
-                                row![
+                                column![
                                     column![
                                         text(&p.label).size(13),
                                         text(&p.unit).size(10).color(style::MUTED)
@@ -213,8 +173,8 @@ impl Studio {
                                         value: p.confirmed,
                                         range: p.range
                                     })
-                                    .width(34)
-                                    .height(34),
+                                    .width(64)
+                                    .height(64),
                                     container(
                                         text(
                                             p.display_text
@@ -237,7 +197,7 @@ impl Studio {
                                     .style(style::inset)
                                 ]
                                 .spacing(10)
-                                .align_y(iced::Center),
+                                .align_x(iced::Center),
                             )
                             .key((
                                 self.snapshot.as_ref().unwrap().context.session.clone(),
@@ -265,7 +225,7 @@ impl Studio {
                                 false,
                             )),
                         );
-                        body = body.push(
+                        parameter_control = parameter_control.push(
                             text(format!(
                                 "{}{}",
                                 p.read_status.as_deref().unwrap_or("status unknown"),
@@ -287,7 +247,7 @@ impl Studio {
                         {
                             let block = b.id.clone();
                             let parameter = p.id.clone();
-                            body = body.push(
+                            parameter_control = parameter_control.push(
                                 iced::widget::slider(
                                     min..=max,
                                     self.pending_parameters
@@ -310,7 +270,13 @@ impl Studio {
                                 .step(0.1),
                             );
                         }
+                        controls = controls.push(
+                            container(parameter_control.width(140))
+                                .padding(10)
+                                .style(style::inset),
+                        );
                     }
+                    body = body.push(controls.wrap());
                     if b.parameters.is_empty() {
                         body = body.push(label(if b.parameter_prefix.is_some() {
                             "No parameter identifiers are available in the bundled static catalog."

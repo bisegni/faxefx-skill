@@ -1,3 +1,5 @@
+// Retain simulation regression tests; the editor draws static Axe-Edit-style cables.
+#[cfg(test)]
 mod cables;
 mod effects;
 mod routing;
@@ -26,7 +28,7 @@ impl Pane {
     fn title(self) -> &'static str {
         match self {
             Self::Presets => "Presets",
-            Self::Inspector => "Block inspector",
+            Self::Inspector => "Block editor",
             Self::Routing => "Signal chain",
             Self::Chat => "Tone assistant",
             Self::Audio => "Reference audio & audition",
@@ -203,17 +205,17 @@ fn layout() -> pane_grid::State<Pane> {
         ratio: 0.74,
         a: Box::new(C::Split {
             axis: Axis::Vertical,
-            ratio: 0.23,
-            a: Box::new(C::Split {
-                axis: Axis::Horizontal,
-                ratio: 0.4,
-                a: Box::new(C::Pane(Pane::Presets)),
-                b: Box::new(C::Pane(Pane::Inspector)),
-            }),
+            ratio: 0.20,
+            a: Box::new(C::Pane(Pane::Presets)),
             b: Box::new(C::Split {
                 axis: Axis::Vertical,
-                ratio: 0.64,
-                a: Box::new(C::Pane(Pane::Routing)),
+                ratio: 0.69,
+                a: Box::new(C::Split {
+                    axis: Axis::Horizontal,
+                    ratio: 0.57,
+                    a: Box::new(C::Pane(Pane::Routing)),
+                    b: Box::new(C::Pane(Pane::Inspector)),
+                }),
                 b: Box::new(C::Pane(Pane::Chat)),
             }),
         }),

@@ -1,12 +1,9 @@
 //! Native routing presentation; coordinates and cable styling never alter routing.
-use crate::{Message, cables, effects::EffectWidgetRegistry, style};
+use crate::{Message, effects::EffectWidgetRegistry, style};
 use axe_domain::{Block, Snapshot};
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
-use std::{
-    cell::{Cell, RefCell},
-    collections::BTreeMap,
-};
+use std::{cell::Cell, collections::BTreeMap};
 pub struct RoutingCanvas<'a> {
     pub snapshot: &'a Snapshot,
     pub simple: bool,
@@ -19,8 +16,6 @@ pub struct RoutingState {
     loose: Option<Point>,
     pointer: Point,
     awake: Cell<bool>,
-    chains: RefCell<BTreeMap<(String, String), cables::CableSimulation>>,
-    last: Cell<Option<std::time::Instant>>,
 }
 impl Default for RoutingState {
     fn default() -> Self {
@@ -29,8 +24,6 @@ impl Default for RoutingState {
             loose: None,
             pointer: Point::ORIGIN,
             awake: Cell::new(true),
-            chains: Default::default(),
-            last: Cell::new(None),
         }
     }
 }
@@ -38,8 +31,8 @@ impl RoutingCanvas<'_> {
     fn geometry(&self, bounds: Rectangle) -> (f32, f32, impl Fn(&Block) -> Point + use<'_>) {
         let cell_w = (bounds.width - 24.).max(14.) / 14.;
         let cell_h = (bounds.height - 24.).max(14.) / 6.;
-        let width = (cell_w - 20.).clamp(36., 64.);
-        let height = (cell_h - 16.).clamp(38., 46.);
+        let width = (cell_w * 0.62).clamp(12., 68.);
+        let height = (cell_h * 0.68).clamp(12., 50.);
         let automatic = auto_layout(self.snapshot, bounds.size());
         (width, height, move |block: &Block| {
             let p = self
@@ -48,10 +41,7 @@ impl RoutingCanvas<'_> {
                 .copied()
                 .or_else(|| automatic.get(&block.id).copied())
                 .unwrap_or((8., 8.));
-            Point::new(
-                p.0.clamp(8., (bounds.width - width - 8.).max(8.)),
-                p.1.clamp(8., (bounds.height - height - 8.).max(8.)),
-            )
+            snap_to_cell(Point::new(p.0, p.1), bounds.size())
         })
     }
 }
@@ -60,8 +50,8 @@ impl RoutingCanvas<'_> {
 pub fn auto_layout(snapshot: &Snapshot, size: Size) -> BTreeMap<String, (f32, f32)> {
     let cell_w = (size.width - 24.).max(14.) / 14.;
     let cell_h = (size.height - 24.).max(14.) / 6.;
-    let width = (cell_w - 20.).clamp(36., 64.);
-    let height = (cell_h - 16.).clamp(38., 46.);
+    let width = (cell_w * 0.62).clamp(12., 68.);
+    let height = (cell_h * 0.68).clamp(12., 50.);
     let mut positions = BTreeMap::new();
     for block in &snapshot.blocks {
         let col = usize::from(block.position.0).min(13);
@@ -71,6 +61,19 @@ pub fn auto_layout(snapshot: &Snapshot, size: Size) -> BTreeMap<String, (f32, f3
         positions.insert(block.id.clone(), (x, y));
     }
     positions
+}
+
+/// Snap a tile's top-left corner to the nearest slot in the visible 14 x 6 grid.
+fn snap_to_cell(point: Point, size: Size) -> Point {
+    let cell_w = (size.width - 24.).max(14.) / 14.;
+    let cell_h = (size.height - 24.).max(14.) / 6.;
+    let width = (cell_w * 0.62).clamp(12., 68.);
+    let height = (cell_h * 0.68).clamp(12., 50.);
+    let first_x = 12. + (cell_w - width) / 2.;
+    let first_y = 12. + (cell_h - height) / 2.;
+    let col = ((point.x - first_x) / cell_w).round().clamp(0., 13.);
+    let row = ((point.y - first_y) / cell_h).round().clamp(0., 5.);
+    Point::new(first_x + col * cell_w, first_y + row * cell_h)
 }
 
 fn line(f: &mut Frame, a: Point, b: Point, color: Color, width: f32) {
@@ -374,8 +377,6 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
                     let ports = [
                         Point::new(a.x, a.y + height / 2.),
                         Point::new(a.x + width, a.y + height / 2.),
-                        Point::new(a.x + width / 2., a.y),
-                        Point::new(a.x + width / 2., a.y + height),
                     ];
                     if let Some(port) = ports
                         .into_iter()
@@ -398,10 +399,23 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
                 let p = cursor.position_in(bounds)?;
                 state.pointer = p;
                 if let Some((id, start, origin)) = &state.drag {
+                    let destination = snap_to_cell(
+                        Point::new(origin.x + p.x - start.x, origin.y + p.y - start.y),
+                        bounds.size(),
+                    );
+                    // An occupied slot keeps the effect at its last valid location.
+                    if self
+                        .snapshot
+                        .blocks
+                        .iter()
+                        .any(|block| &block.id != id && position(block).distance(destination) < 1.)
+                    {
+                        return Some(canvas::Action::request_redraw().and_capture());
+                    }
                     return Some(
                         canvas::Action::publish(Message::MoveBlock(
                             id.clone(),
-                            (origin.x + p.x - start.x, origin.y + p.y - start.y),
+                            (destination.x, destination.y),
                         ))
                         .and_capture(),
                     );
@@ -435,38 +449,26 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
             *viewport = bounds.size();
         }
         let mut f = Frame::new(renderer, bounds.size());
-        f.fill_rectangle(Point::ORIGIN, bounds.size(), iced::color!(0x090f13));
+        f.fill_rectangle(Point::ORIGIN, bounds.size(), iced::color!(0x202020));
         let (width, height, position) = self.geometry(bounds);
         let cell_w = (bounds.width - 24.).max(14.) / 14.;
         let cell_h = (bounds.height - 24.).max(14.) / 6.;
         for row in 0..6 {
             for col in 0..14 {
                 let origin = Point::new(
-                    12. + col as f32 * cell_w + 2.,
-                    12. + row as f32 * cell_h + 2.,
+                    12. + col as f32 * cell_w + (cell_w - width) / 2.,
+                    12. + row as f32 * cell_h + (cell_h - height) / 2.,
                 );
-                let cell = Path::rounded_rectangle(
-                    origin,
-                    Size::new((cell_w - 4.).max(1.), (cell_h - 4.).max(1.)),
-                    3.into(),
-                );
-                f.fill(&cell, iced::color!(0x0a1115));
+                let cell = Path::rounded_rectangle(origin, Size::new(width, height), 3.into());
+                f.fill(&cell, iced::color!(0x0c0c0c));
                 f.stroke(
                     &cell,
                     Stroke::default()
-                        .with_color(iced::color!(0x151f26))
-                        .with_width(0.5),
+                        .with_color(iced::color!(0x333333))
+                        .with_width(1.),
                 );
             }
         }
-        let now = std::time::Instant::now();
-        let elapsed = state
-            .last
-            .replace(Some(now))
-            .map(|last| now.duration_since(last).as_secs_f32())
-            .unwrap_or(1. / 60.);
-        let mut awake = false;
-        let mut chains = state.chains.borrow_mut();
         for (a, b) in &self.snapshot.edges {
             let (Some(source), Some(target)) = (
                 self.snapshot.blocks.iter().find(|x| &x.id == a),
@@ -476,72 +478,26 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
             };
             let a = position(source);
             let b = position(target);
-            let dx = (b.x + width / 2.) - (a.x + width / 2.);
-            let dy = (b.y + height / 2.) - (a.y + height / 2.);
-            let (start, end) = if dx.abs() >= dy.abs() {
-                if dx >= 0. {
-                    (
-                        Point::new(a.x + width, a.y + height / 2.),
-                        Point::new(b.x, b.y + height / 2.),
-                    )
-                } else {
-                    (
-                        Point::new(a.x, a.y + height / 2.),
-                        Point::new(b.x + width, b.y + height / 2.),
-                    )
-                }
-            } else if dy >= 0. {
-                (
-                    Point::new(a.x + width / 2., a.y + height),
-                    Point::new(b.x + width / 2., b.y),
-                )
-            } else {
-                (
-                    Point::new(a.x + width / 2., a.y),
-                    Point::new(b.x + width / 2., b.y + height),
-                )
-            };
-            let key = (source.id.clone(), target.id.clone());
-            let cable = chains.entry(key).or_insert_with(|| {
-                cables::CableSimulation::new(
-                    cables::Point {
-                        x: start.x,
-                        y: start.y,
-                    },
-                    cables::Point { x: end.x, y: end.y },
-                )
-            });
-            cable.endpoints(
-                cables::Point {
-                    x: start.x,
-                    y: start.y,
-                },
-                cables::Point { x: end.x, y: end.y },
-            );
-            awake |= cable.advance(elapsed, self.simple);
+            let start = Point::new(a.x + width, a.y + height / 2.);
+            let end = Point::new(b.x, b.y + height / 2.);
             let path = Path::new(|p| {
                 p.move_to(start);
-                for pt in &cable.points[1..] {
-                    p.line_to(Point::new(pt.x, pt.y));
+                if self.simple || (start.y - end.y).abs() < 1. {
+                    p.line_to(end);
+                } else {
+                    let bend = ((end.x - start.x).abs() * 0.5).max(cell_w * 0.35);
+                    p.bezier_curve_to(
+                        Point::new(start.x + bend, start.y),
+                        Point::new(end.x - bend, end.y),
+                        end,
+                    );
                 }
             });
             f.stroke(
                 &path,
                 Stroke::default()
-                    .with_color(Color::BLACK.scale_alpha(0.8))
-                    .with_width(7.),
-            );
-            f.stroke(
-                &path,
-                Stroke::default()
-                    .with_color(iced::color!(0x607487))
-                    .with_width(3.),
-            );
-            f.stroke(
-                &path,
-                Stroke::default()
-                    .with_color(iced::color!(0xa6c5df))
-                    .with_width(1.2),
+                    .with_color(iced::color!(0xbcbcbc))
+                    .with_width(2.),
             );
         }
         let registry = EffectWidgetRegistry::default();
@@ -556,89 +512,95 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
             let p = position(b);
             let material = registry.presentation(&b.family);
             let active = selected == Some(b.id.as_str());
-            let rect = Path::rounded_rectangle(p, Size::new(width, height), 6.into());
-            f.fill(
-                &Path::rounded_rectangle(
-                    p + Vector::new(0., 4.),
-                    Size::new(width, height),
-                    6.into(),
-                ),
-                Color::BLACK.scale_alpha(0.65),
-            );
-            if active {
-                f.stroke(
+            let rect = Path::rounded_rectangle(p, Size::new(width, height), 2.into());
+            let shunt = matches!(b.family.as_str(), "wire" | "shunt");
+            let bypassed = b.bypassed == Some(true);
+            let accent = match b.family.as_str() {
+                "input" => iced::color!(0x424f7c),
+                "output" => iced::color!(0x286548),
+                "comp" | "multicomp" | "gate" => iced::color!(0x878525),
+                "drive" | "dynamic-distortion" => iced::color!(0x91332b),
+                "amp" => iced::color!(0x454238),
+                "cab" => iced::color!(0x475c5b),
+                "peq" | "geq" => iced::color!(0xa96928),
+                "chorus" => iced::color!(0x2683a1),
+                "flanger" | "phaser" => iced::color!(0x753c67),
+                "delay" | "multitap" => iced::color!(0x274d80),
+                "reverb" => iced::color!(0x634e7e),
+                _ => material.accent.scale_alpha(0.65),
+            };
+            if !shunt && !bypassed {
+                f.fill(
                     &rect,
-                    Stroke::default()
-                        .with_color(style::BLUE.scale_alpha(0.16))
-                        .with_width(8.),
+                    canvas::Gradient::Linear(
+                        canvas::gradient::Linear::new(p, Point::new(p.x, p.y + height))
+                            .add_stop(0., accent)
+                            .add_stop(0.55, accent.scale_alpha(0.85))
+                            .add_stop(1., iced::color!(0x181818)),
+                    ),
                 );
             }
-            f.fill(
-                &rect,
-                iced::widget::canvas::Gradient::Linear(
-                    iced::widget::canvas::gradient::Linear::new(p, Point::new(p.x, p.y + height))
-                        .add_stop(0., iced::color!(0x1e2b36))
-                        .add_stop(1., iced::color!(0x101820)),
-                ),
-            );
             f.stroke(
                 &rect,
                 Stroke::default()
                     .with_color(if active {
-                        style::BLUE
+                        iced::color!(0xffcc44)
+                    } else if bypassed || shunt {
+                        iced::color!(0x505050)
                     } else {
-                        iced::color!(0x526674)
+                        iced::color!(0xc4c4ba)
                     })
-                    .with_width(if active { 2. } else { 1. }),
+                    .with_width(if active { 2.5 } else { 1.5 }),
             );
-            f.fill(
-                &Path::rounded_rectangle(
-                    Point::new(p.x + 1., p.y + 3.),
-                    Size::new(2., height - 6.),
-                    3.into(),
-                ),
-                material.accent,
-            );
-            icon(
-                &mut f,
-                &b.family,
-                Point::new(p.x + width / 2., p.y + 14.),
-                material.accent,
-            );
-            let label = b.label.clone();
-            let chars = ((width - 8.) / 5.5).floor().max(3.) as usize;
+            if shunt {
+                line(
+                    &mut f,
+                    Point::new(p.x, p.y + height / 2.),
+                    Point::new(p.x + width, p.y + height / 2.),
+                    iced::color!(0xbcbcbc),
+                    2.,
+                );
+                continue;
+            }
+            let ink = if bypassed {
+                iced::color!(0x555555)
+            } else {
+                iced::color!(0xe5e5dc)
+            };
+            f.with_save(|f| {
+                f.translate(Vector::new(p.x + width / 2., p.y + height * 0.28));
+                f.scale((width / 48.).min(height / 48.).min(1.));
+                icon(
+                    f,
+                    &b.family,
+                    Point::ORIGIN,
+                    if bypassed {
+                        ink
+                    } else {
+                        Color::BLACK.scale_alpha(0.7)
+                    },
+                );
+            });
+            let label = match b.family.as_str() {
+                "input" => b.label.replace("INPUT", "In").replace("Input", "In"),
+                "output" => b.label.replace("OUTPUT", "Out").replace("Output", "Out"),
+                "peq" => "PEQ".into(),
+                "geq" => "GEQ".into(),
+                "flanger" => "Flange".into(),
+                _ => material.icon.to_string(),
+            };
             f.fill_text(canvas::Text {
-                content: if label.chars().count() > chars {
-                    format!(
-                        "{}…",
-                        label
-                            .chars()
-                            .take(chars.saturating_sub(1))
-                            .collect::<String>()
-                    )
+                content: label,
+                position: Point::new(p.x + width / 2., p.y + height * 0.60),
+                color: if !bypassed && matches!(b.family.as_str(), "input" | "output") {
+                    iced::color!(0x71ff62)
                 } else {
-                    label
+                    ink
                 },
-                position: Point::new(p.x + width / 2., p.y + 29.),
-                color: style::TEXT,
-                size: 9.into(),
+                size: (width / 4.2).clamp(7., 15.).into(),
                 align_x: iced::alignment::Horizontal::Center.into(),
                 ..Default::default()
             });
-            for pt in [
-                Point::new(p.x, p.y + height / 2.),
-                Point::new(p.x + width, p.y + height / 2.),
-                Point::new(p.x + width / 2., p.y),
-                Point::new(p.x + width / 2., p.y + height),
-            ] {
-                f.fill(&Path::circle(pt, 2.5), iced::color!(0x0a1118));
-                f.stroke(
-                    &Path::circle(pt, 2.),
-                    Stroke::default()
-                        .with_color(iced::color!(0x8dd0ff))
-                        .with_width(1.),
-                );
-            }
         }
         if let Some(start) = state.loose {
             f.stroke(
@@ -648,7 +610,7 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
         }
         state
             .awake
-            .set(awake || state.drag.is_some() || state.loose.is_some());
+            .set(state.drag.is_some() || state.loose.is_some());
         vec![f.into_geometry()]
     }
 }
@@ -657,6 +619,27 @@ impl canvas::Program<Message> for RoutingCanvas<'_> {
 mod tests {
     use super::*;
     use axe_session::{Mock, Transport};
+
+    #[test]
+    fn snapping_centers_tiles_in_nearest_slot_and_clamps_edges() {
+        for size in [Size::new(700., 300.), Size::new(1128., 730.)] {
+            let snapshot = Mock::default().snapshot().unwrap();
+            let positions = auto_layout(&snapshot, size);
+            let cell_w = (size.width - 24.) / 14.;
+            let cell_h = (size.height - 24.) / 6.;
+            for (x, y) in positions.values() {
+                let exact = Point::new(*x, *y);
+                assert!(snap_to_cell(exact, size).distance(exact) < 0.001);
+                let dragged = Point::new(x + cell_w * 0.4, y - cell_h * 0.4);
+                assert!(snap_to_cell(dragged, size).distance(exact) < 0.001);
+            }
+            let first = snap_to_cell(Point::ORIGIN, size);
+            assert_eq!(snap_to_cell(Point::new(-1000., -1000.), size), first);
+            let last = snap_to_cell(Point::new(10000., 10000.), size);
+            assert!((last.x - first.x - 13. * cell_w).abs() < 0.001);
+            assert!((last.y - first.y - 5. * cell_h).abs() < 0.001);
+        }
+    }
 
     #[test]
     fn compact_grid_keeps_all_cells_inside_viewport_and_separate() {
@@ -685,7 +668,7 @@ mod tests {
                 viewport: Default::default(),
             };
             let (width, height, position) = canvas.geometry(Rectangle::new(Point::ORIGIN, size));
-            assert!(width <= 64. && height <= 46.);
+            assert!(width <= 68. && height <= 50.);
             for block in &snapshot.blocks {
                 let p = position(block);
                 assert!(
