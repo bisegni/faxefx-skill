@@ -1,6 +1,8 @@
-// Access only the owned copy's original Axe-Edit accessibility controls.
-// Axe-Edit owns the MIDI transport; no guessed parameter/SysEx writes are used.
+// Read the owned copy's Axe-Edit accessibility tree; write parameters only
+// through Axe-Edit's own Undo-aware command path (NativeBridge). Axe-Edit owns
+// the MIDI transport; no SysEx, mouse or keyboard synthesis is used.
 #import "EditorTools.h"
+#import "NativeBridge.h"
 #import <objc/message.h>
 #include <cmath>
 
@@ -84,63 +86,20 @@ static NSNumber *displayNumber(id node) {
     NSCharacterSet *units=[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ%°/ "];
     return [suffix rangeOfCharacterFromSet:units.invertedSet].location==NSNotFound ? @(number) : nil;
 }
-static NSRect frameOf(id node) {
-    @try {if([node respondsToSelector:@selector(accessibilityFrame)])return [(id<NSAccessibility>)node accessibilityFrame];}
-    @catch(NSException *exception) {} return NSZeroRect;
-}
-static BOOL canEdit(id node) {
-    return allowed(node,@selector(setAccessibilityValue:)) ||
-        ([attr(node,@"role") isEqual:NSAccessibilityTextAreaRole] &&
-         (allowed(node,@selector(accessibilityPerformPress)) || !NSIsEmptyRect(frameOf(node))));
-}
-static BOOL editText(id node,NSString *text,NSView *root,NSString **failure) {
+// Text fields (scene name) are edited only through an accessibility value
+// setter the control itself exposes; otherwise the edit is refused.
+static BOOL editText(id node,NSString *text,NSString **failure) {
     if(allowed(node,@selector(setAccessibilityValue:)))return setValue(node,text);
-    NSString *previous=textOf(node);
-    for(NSString *field in @[@"Scene Name:",@"Preset Name:"])if([previous hasPrefix:field])previous=[[previous substringFromIndex:field.length] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
-    if(!root.window || ![attr(node,@"role") isEqual:NSAccessibilityTextAreaRole])return NO;
-    if(!allowed(node,@selector(accessibilityPerformPress))) {
-        // Some vendor Label subclasses omit the accessibility press action.
-        // Double-click the observed label's own frame inside this editor only.
-        // The model cannot supply coordinates or arbitrary mouse/key events.
-        NSRect frame=frameOf(node);
-        NSRect editorFrame=[root.window convertRectToScreen:[root convertRect:root.bounds toView:nil]];
-        if(NSIsEmptyRect(frame) || !NSContainsRect(editorFrame,frame))return NO;
-        NSPoint point=[root.window convertPointFromScreen:NSMakePoint(NSMidX(frame),NSMidY(frame))];
-        for(NSNumber *type in @[@(NSEventTypeLeftMouseDown),@(NSEventTypeLeftMouseUp)]) {
-            NSEvent *event=[NSEvent mouseEventWithType:(NSEventType)type.unsignedIntegerValue location:point modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:root.window.windowNumber context:nil eventNumber:0 clickCount:2 pressure:1];
-            if(type.unsignedIntegerValue==NSEventTypeLeftMouseDown)[root mouseDown:event];else [root mouseUp:event];
-        }
-    } else if(!press(node))return NO;
-    id focused=attr(node,@"focus") ?: attr(root,@"focus") ?: attr(root.window.firstResponder,@"focus");
-    if(!focused || focused==node || ![attr(focused,@"role") isEqual:NSAccessibilityTextAreaRole] ||
-       attr(focused,@"window")!=root.window || ![textOf(focused) isEqual:previous] || !allowed(focused,@selector(setAccessibilityValue:))) {
-        // Vendor numeric editors are modal and may intentionally disappear
-        // from AX. Use the owned JUCE view's standard NSTextInputClient only
-        // after both its complete text and insertion rectangle match this label.
-        if([root respondsToSelector:@selector(attributedSubstringForProposedRange:actualRange:)] &&
-           [root respondsToSelector:@selector(insertText:replacementRange:)] &&
-           [root respondsToSelector:@selector(firstRectForCharacterRange:actualRange:)]) {
-            id<NSTextInputClient> input=(id<NSTextInputClient>)root;
-            NSRange actual=NSMakeRange(NSNotFound,0);
-            NSAttributedString *current=[input attributedSubstringForProposedRange:NSMakeRange(0,4096) actualRange:&actual];
-            NSRect insertion=[input firstRectForCharacterRange:NSMakeRange(0,1) actualRange:NULL];
-            if(failure)*failure=[NSString stringWithFormat:@"Native entry did not match the target label (text=%@, label=%@, entry_frame=%@, label_frame=%@); no value sent",current.string ?: @"missing",previous,NSStringFromRect(insertion),NSStringFromRect(frameOf(node))];
-            if([current.string isEqual:previous] && actual.location==0 && actual.length==previous.length &&
-               NSIntersectsRect(NSInsetRect(frameOf(node),-4,-4),insertion)) {
-                [input insertText:text replacementRange:NSMakeRange(0,previous.length)];
-                NSEvent *commit=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:root.window.windowNumber context:nil characters:@"\r" charactersIgnoringModifiers:@"\r" isARepeat:NO keyCode:36];
-                [root keyDown:commit];
-                return YES;
-            }
-        }
-        if(failure && !*failure)*failure=[NSString stringWithFormat:@"Numeric/name editor identity check failed (role=%@, text=%@, same_window=%@); no value sent",attr(focused,@"role") ?: @"missing",textOf(focused),@(attr(focused,@"window")==root.window)];
-        return NO;
-    }
-    if(!setValue(focused,text))return NO;
-    // Commit only the just-opened, identity-checked numeric/name editor.
-    NSEvent *event=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:root.window.windowNumber context:nil characters:@"\r" charactersIgnoringModifiers:@"\r" isARepeat:NO keyCode:36];
-    [root.window sendEvent:event];
-    return YES;
+    if(failure)*failure=@"This control exposes no native value setter; not edited";
+    return NO;
+}
+// Half a unit of the precision the editor displays (e.g. "2.51" -> 0.005).
+static double displayTolerance(NSString *label) {
+    NSString *text=[[label componentsSeparatedByString:@","] firstObject];
+    NSRange colon=[text rangeOfString:@":"]; if(colon.location!=NSNotFound) text=[text substringFromIndex:colon.location+1];
+    NSRange dot=[text rangeOfString:@"."]; NSUInteger digits=0;
+    if(dot.location!=NSNotFound) for(NSUInteger i=dot.location+1;i<text.length && [NSCharacterSet.decimalDigitCharacterSet characterIsMember:[text characterAtIndex:i]];++i) ++digits;
+    return 0.5*std::pow(10.0,-(double)digits)+1e-9;
 }
 static NSDictionary *errorResult(NSString *message) { return @{@"ok":@NO,@"error":message}; }
 static NSString *parameterName(NSString *label) {
@@ -170,7 +129,7 @@ static NSString *parameterName(NSString *label) {
     NSDictionary *base=@{@"expected_context":context,@"operation_id":key};
     NSMutableDictionary *(^props)(NSDictionary*)=^NSMutableDictionary*(NSDictionary *extra) { NSMutableDictionary *p=[base mutableCopy];[p addEntriesFromDictionary:extra];return p; };
     add(@"axefx_select_block",@"Select an existing effect by its inspected grid label. Returns the selected block's actual parameters; does not insert or remove blocks.",props(@{@"block":string}),@[@"block",@"expected_context",@"operation_id"]);
-    add(@"axefx_set_parameter",@"Change one selected effect parameter through Axe-Edit's native string-value setter using exact expected_value. Observe exposed ranges; if bounds are not exposed they remain unknown and the original control validates/clamps the request. Returns UI readback; hardware persistence is not claimed.",props(@{@"parameter":string,@"value":number,@"expected_value":number}),@[@"parameter",@"value",@"expected_value",@"expected_context",@"operation_id"]);
+    add(@"axefx_set_parameter",@"Change one numeric knob of the selected effect through Axe-Edit's own Undo-aware parameter command (the same path as typing a value into the knob). Requires the exact current value as expected_value and a value within the inspected minimum..maximum. Only parameters inspected as writable=true can be set; not_writable_reason explains the rest. Returns editor readback; the user can undo with Cmd-Z; hardware persistence is not claimed.",props(@{@"parameter":string,@"value":number,@"expected_value":number}),@[@"parameter",@"value",@"expected_value",@"expected_context",@"operation_id"]);
     add(@"axefx_set_bypass",@"Set the selected effect's bypass state in the current scene; verify the returned UI state.",props(@{@"bypassed":@{@"type":@"boolean"}}),@[@"bypassed",@"expected_context",@"operation_id"]);
     add(@"axefx_select_channel",@"Choose an existing channel A-D for the selected effect in the current scene. Other scenes/channels are not rewritten.",props(@{@"channel":@{@"type":@"string",@"enum":@[@"A",@"B",@"C",@"D"]}}),@[@"channel",@"expected_context",@"operation_id"]);
     add(@"axefx_select_scene",@"Select one of the Axe-Fx's eight existing scene slots (1-8). Build a scene by selecting it, setting block bypass/channels/parameters, and naming it. There are no extra scene slots.",props(@{@"scene":@{@"type":@"integer",@"minimum":@1,@"maximum":@8}}),@[@"scene",@"expected_context",@"operation_id"]);
@@ -178,9 +137,10 @@ static NSString *parameterName(NSString *label) {
     return specs;
 }
 + (NSString *)systemPrompt {
-    return @"You are an active guitar-tone assistant for the user's Axe-Fx III, embedded in its real Axe-Edit editor. Help create useful guitar tones and scenes from musical descriptions, playing feedback, reference rigs and recordings when supported. Use the provided axefx_* tools to inspect and edit the actual connected Axe-Fx through Axe-Edit. The user's tone-making request authorizes reasonable current-edit-buffer changes; do not merely give manual knob instructions when a supported tool can perform the requested edit. Start with axefx_inspect, select the intended block, and use observed parameter names, values, channels, bypass state and known effect identities. Respect exposed ranges; unexposed bounds remain unknown and the original native control validates/clamps requests. Never invent a universal parameter range. Parameter changes affect the block channel and may also affect other scenes using that same channel; explain this when building scene-specific tones. Work in small musical steps and ask the user to play and report what they hear.\n\nTools: axefx_inspect reads current preset/scenes/effects/selected parameters and context. axefx_select_block selects an existing grid block. axefx_set_parameter changes a numeric parameter using its expected prior value. axefx_set_bypass and axefx_select_channel configure a block for the current scene. axefx_select_scene selects one of the eight fixed slots; use it with bypass/channel/parameter edits and axefx_name_scene to build scenes. Effect model changes, block insertion/deletion and cable changes are not exposed yet; do not claim to perform them or guess UI coordinates.\n\nEvery selection or mutation needs the latest expected_context; refresh inspection after each edit. Use a unique operation_id per intended mutation and preserve it on retries. Never retry an uncertain write as a new operation. A disconnected device, stale context, unsupported value, pending operation, or Stop must halt edits. Report tool failures and partial results honestly. Readback verification_scope=axe_edit_ui confirms only the editor's value, not an independent hardware getter or persistence. Never claim to have heard audio without an actual audio tool result. Preset Save/Store, raw MIDI, firmware, global settings, shell, filesystem, web, connectors and delegated agents are unavailable. Never instruct a workaround to bypass these limits. Do not save a preset automatically. Keep explanations musical, concise, and specific to the user's guitar-tone goal.";
+    return @"You are an active guitar-tone assistant for the user's Axe-Fx III, embedded in its real Axe-Edit editor. Help create useful guitar tones and scenes from musical descriptions, playing feedback, reference rigs and recordings when supported. Use the provided axefx_* tools to inspect and edit the actual connected Axe-Fx through Axe-Edit. The user's tone-making request authorizes reasonable current-edit-buffer changes; do not merely give manual knob instructions when a supported tool can perform the requested edit. Start with axefx_inspect, select the intended block, and use observed parameter names, values, channels, bypass state and known effect identities. Respect each parameter's inspected minimum/maximum and only set parameters marked writable=true; never invent ranges. Each edit is a normal Axe-Edit edit the user can undo with Cmd-Z. Parameter changes affect the block channel and may also affect other scenes using that same channel; explain this when building scene-specific tones. Work in small musical steps and ask the user to play and report what they hear.\n\nTools: axefx_inspect reads current preset/scenes/effects/selected parameters and context. axefx_select_block selects an existing grid block. axefx_set_parameter changes a writable numeric knob using its expected prior value. axefx_set_bypass and axefx_select_channel configure a block for the current scene. axefx_select_scene selects one of the eight fixed slots; use it with bypass/channel/parameter edits and axefx_name_scene to build scenes. Effect model changes, block insertion/deletion and cable changes are not exposed yet; do not claim to perform them or guess UI coordinates.\n\nEvery selection or mutation needs the latest expected_context; refresh inspection after each edit. Use a unique operation_id per intended mutation and preserve it on retries. Never retry an uncertain write as a new operation. A disconnected device, stale context, unsupported value, pending operation, or Stop must halt edits. Report tool failures and partial results honestly. Readback verification_scope=axe_edit_ui confirms only the editor's value, not an independent hardware getter or persistence. Never claim to have heard audio without an actual audio tool result. Preset Save/Store, raw MIDI, firmware, global settings, shell, filesystem, web, connectors and delegated agents are unavailable. Never instruct a workaround to bypass these limits. Do not save a preset automatically. Keep explanations musical, concise, and specific to the user's guitar-tone goal.";
 }
 - (NSArray *)nodes { return nodesOf(self.editor); }
+- (id<AxeParameterWriter>)writer { return self.parameterWriter ?: [AxeNativeBridge shared]; }
 - (NSDictionary *)diagnostics {
     NSMutableArray *tree=[NSMutableArray array];
     for(id node in [self nodes]) {
@@ -220,10 +180,15 @@ static NSString *parameterName(NSString *label) {
             [scenes addObject:@{@"label":label,@"selected":@([boolOf(value) boolValue])}];
         if([label hasPrefix:@"Channel "] && [boolOf(value) boolValue]) context[@"channel"]=label;
         if([role isEqual:NSAccessibilitySliderRole]) {
-            id min=numberOf(attr(node,@"min")), max=numberOf(attr(node,@"max"));value=displayNumber(node);
-            BOOL writable=value && (allowed(node,@selector(setAccessibilityValue:)) || canEdit(numericLabel(node)));
-            [parameters addObject:@{@"parameter":parameterName(label),@"label":label,@"value":value ?: NSNull.null,
-                @"minimum":min ?: NSNull.null,@"maximum":max ?: NSNull.null,@"range_status":min && max ? @"exposed" : @"not_exposed_native_control_validates",@"writable":@(writable)}];
+            value=displayNumber(node); NSString *why=nil;
+            NSDictionary *native=[self.writer parameterForAccessibilityNode:node failure:&why];
+            NSMutableDictionary *row=[@{@"parameter":parameterName(label),@"label":label,@"value":value ?: NSNull.null,
+                @"writable":@(value && native!=nil)} mutableCopy];
+            if(native) {
+                row[@"minimum"]=native[@"display_min"];row[@"maximum"]=native[@"display_max"];row[@"step"]=@([native[@"step"] doubleValue]*[native[@"scale"] doubleValue]);
+                row[@"effect_id"]=native[@"effect"];row[@"parameter_id"]=native[@"parameter"];
+            } else row[@"not_writable_reason"]=why ?: @"Unknown";
+            [parameters addObject:row];
         }
         if([label hasPrefix:@"Bypass:"] || [label isEqual:@"Bypass"]) context[@"bypassed"]=boolOf(value) ?: NSNull.null;
     }
@@ -259,7 +224,7 @@ static NSString *parameterName(NSString *label) {
     if(![args[@"expected_context"] isEqual:before[@"context_token"]]) { reply(errorResult(@"Stale editor context; call axefx_inspect again")); return; }
     if(![key isKindOfClass:NSString.class] || !key.length || key.length>256) { reply(errorResult(@"operation_id is required")); return; }
     NSArray *nodes=[self nodes]; id target=nil; BOOL accepted=NO;
-    NSString *verifyKind=nil; id wanted=nil; NSString *failure=nil;
+    NSString *verifyKind=nil; id wanted=nil; NSString *failure=nil; NSNumber *restore=nil;
     self.executing=YES;
     if([name isEqual:@"axefx_select_block"]) {
         NSString *block=args[@"block"];
@@ -270,10 +235,14 @@ static NSString *parameterName(NSString *label) {
         for(id node in nodes) if([attr(node,@"role") isEqual:NSAccessibilitySliderRole] && [parameterName(labelOf(node)) isEqual:parameter]) {
             if(target) { failure=@"Parameter label is ambiguous"; break; } target=node;
         }
-        id min=numberOf(attr(target,@"min")), max=numberOf(attr(target,@"max")), current=displayNumber(target);
-        if(![number isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)number)==CFBooleanGetTypeID() || !std::isfinite(number.doubleValue) || ![expected isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)expected)==CFBooleanGetTypeID() || !std::isfinite(expected.doubleValue) ||
-            !current || (min && max && ([max doubleValue]<=[min doubleValue] || number.doubleValue<[min doubleValue] || number.doubleValue>[max doubleValue])) || ![current isEqual:expected]) failure=@"Value, exposed range or expected_value is invalid/stale";
-        if(!failure) accepted=allowed(target,@selector(setAccessibilityValue:)) ? setValue(target,number) : editText(numericLabel(target),number.stringValue,self.editor,&failure);
+        NSNumber *current=displayNumber(target);
+        if(!failure && (![number isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)number)==CFBooleanGetTypeID() || !std::isfinite(number.doubleValue) || ![expected isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)expected)==CFBooleanGetTypeID() || !std::isfinite(expected.doubleValue) ||
+            !current || ![current isEqual:expected])) failure=@"Value or expected_value is invalid/stale";
+        // Native path only: the knob's own effect/parameter IDs, the firmware
+        // definition and the editor's Undo-aware command. Range is enforced there.
+        if(!failure && target) accepted=[self.writer setDisplayValue:number.doubleValue forAccessibilityNode:target failure:&failure];
+        if(!target && !failure) failure=@"Parameter not found on the selected block";
+        restore=current;
         verifyKind=@"parameter";wanted=@{@"parameter":parameter ?: @"",@"value":number ?: NSNull.null};
     } else if([name isEqual:@"axefx_set_bypass"] || [name isEqual:@"axefx_select_channel"] || [name isEqual:@"axefx_select_scene"]) {
         NSString *label=nil;
@@ -289,7 +258,7 @@ static NSString *parameterName(NSString *label) {
     } else if([name isEqual:@"axefx_name_scene"]) {
         NSString *value=args[@"name"];
         target=[self find:nil label:@"Scene Name" nodes:nodes];
-        if([value isKindOfClass:NSString.class] && value.length && value.length<=32 && [value rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location==NSNotFound) accepted=editText(target,value,self.editor,&failure);
+        if([value isKindOfClass:NSString.class] && value.length && value.length<=32 && [value rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location==NSNotFound) accepted=editText(target,value,&failure);
         verifyKind=@"scene_name";wanted=value;
     } else { self.executing=NO;reply(errorResult(@"Unknown Axe-Fx tool"));return; }
     if(!accepted) { self.executing=NO;reply(errorResult(failure ?: @"Native editor control is unavailable or refused the operation"));return; }
@@ -304,7 +273,7 @@ static NSString *parameterName(NSString *label) {
         if([verifyKind isEqual:@"selected_block"]) verified=[after[@"context"][@"block"] isEqual:wanted];
         if([verifyKind isEqual:@"parameter"]) for(NSDictionary *parameter in after[@"parameters"])
             if([parameter[@"parameter"] isEqual:wanted[@"parameter"]] && [parameter[@"value"] isKindOfClass:NSNumber.class])
-                verified=std::abs([parameter[@"value"] doubleValue]-[wanted[@"value"] doubleValue])<0.00001;
+                verified=std::abs([parameter[@"value"] doubleValue]-[wanted[@"value"] doubleValue])<=displayTolerance(parameter[@"label"]);
         if([verifyKind isEqual:@"button"]) {
             id fresh=[self find:NSAccessibilityButtonRole label:wanted[@"label"] nodes:[self nodes]];
             NSNumber *current=boolOf(attr(fresh,@"value"));
@@ -316,7 +285,15 @@ static NSString *parameterName(NSString *label) {
         if([name isEqual:@"axefx_set_parameter"] || [name isEqual:@"axefx_set_bypass"] || [name isEqual:@"axefx_name_scene"]) [stableFields addObjectsFromArray:@[@"block_identity",@"channel"]];
         for(NSString *field in stableFields) if(![(before[@"context"][field] ?: NSNull.null) isEqual:(after[@"context"][field] ?: NSNull.null)]) verified=NO;
         if(![after[@"connected"] boolValue])verified=NO;
-        NSDictionary *result=@{@"ok":@(verified && authority()),@"status":!authority() ? @"stopped_after_send" : (verified ? @"ui_readback_verified" : @"sent_readback_unverified"),
+        NSString *status=!authority() ? @"stopped_after_send" : (verified ? @"ui_readback_verified" : @"sent_readback_unverified");
+        // A native write whose editor readback disagrees is put back to the
+        // value shown before the write (same verified conversion), then reported.
+        if(!verified && restore && [verifyKind isEqual:@"parameter"]) {
+            id node=nil; for(id candidate in [self nodes]) if([attr(candidate,@"role") isEqual:NSAccessibilitySliderRole] && [parameterName(labelOf(candidate)) isEqual:wanted[@"parameter"]]) node=candidate;
+            NSString *restoreFailure=nil;
+            status=node && [self.writer setDisplayValue:restore.doubleValue forAccessibilityNode:node failure:&restoreFailure] ? @"readback_mismatch_restore_sent" : @"readback_mismatch_restore_failed_use_undo";
+        }
+        NSDictionary *result=@{@"ok":@(verified && authority()),@"status":status,
             @"retry_write":@NO,@"before":before,@"after":after,@"verification_scope":@"axe_edit_ui",@"hardware_persistence_verified":@NO};
         self.completed[key]=@{@"name":name,@"arguments":args,@"result":result};
         reply(result);

@@ -25,7 +25,8 @@ signature and runtime configuration. No system security setting is changed.
 The copied editor keeps Axe-Edit's ordinary device communications and may share
 the vendor's existing user preferences. A copied bundle is not a sandbox or a
 separate hardware session. The injected library opens no MIDI connection and
-uses the original editor controls for parameter changes. The local agents communicate with their normal
+sends parameter changes through Axe-Edit's own Undo-aware command path
+(`NativeBridge.mm`), so the editor's normal device queue carries them. The local agents communicate with their normal
 services using their existing logins. Avoid running multiple editors against
 the device when testing editing behavior.
 
@@ -79,9 +80,9 @@ Run the focused native regression checks without launching the copied editor:
 ```sh
 xcrun clang -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/SelfTest.m -o .local/sidebar-layout-selftest
 .local/sidebar-layout-selftest
-xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/ChatAgentTest.mm experiments/embedded-sidebar/EditorTools.mm experiments/embedded-sidebar/MCPServer.mm -o .local/sidebar-chat-test
+xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/ChatAgentTest.mm experiments/embedded-sidebar/EditorTools.mm experiments/embedded-sidebar/NativeBridge.mm experiments/embedded-sidebar/MCPServer.mm -o .local/sidebar-chat-test
 .local/sidebar-chat-test
-xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/ChatPanelTest.mm experiments/embedded-sidebar/ChatAgent.mm experiments/embedded-sidebar/EditorTools.mm experiments/embedded-sidebar/MCPServer.mm -o .local/sidebar-chat-panel-test
+xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/ChatPanelTest.mm experiments/embedded-sidebar/ChatAgent.mm experiments/embedded-sidebar/EditorTools.mm experiments/embedded-sidebar/NativeBridge.mm experiments/embedded-sidebar/MCPServer.mm -o .local/sidebar-chat-panel-test
 .local/sidebar-chat-panel-test
 ```
 
@@ -118,11 +119,21 @@ turn authority, and retains operation IDs to prevent duplicate writes. Stop
 revokes future tool actions immediately; it cannot undo a write already sent.
 The process-local operation ledger does not replay mutations on restart.
 
-Axe-Edit's custom knobs expose text labels rather than an AX slider setter.
-The bridge opens the observed label's numeric entry, verifies its existing text
-and location, replaces it through native text input, and commits the entry.
-Unknown bounds remain unknown; the original editor validates/clamps values.
-Results distinguish accepted sends from verified editor readback. The scope is
+Parameter writes use `NativeBridge.mm`, pinned to Axe-Edit III 1.15.03 arm64.
+At startup it checks the executable's `__text` SHA-256, the `A3ComponentComm`
+RTTI and vtable slot; any mismatch disables writes. For a knob it follows the
+accessibility element to its `A3RotaryKnob` (RTTI-checked) and reads the
+knob's own effect ID, parameter ID and display range, then its owning
+`A3EffectEditorContent` and Undo context. The conversion comes from Axe-Edit's
+current effect-definition cache (`raw = display / scale`) and is used only
+when the knob's displayed range equals the cache range times its scale. The
+write is the same command a typed knob entry issues (op `0x09`, flag 0, editor
+Undo context), so Cmd-Z reverts it. Model selection (parameter 0), list
+parameters and non-knob controls are refused; `axefx_inspect` reports
+`writable` and `not_writable_reason` per parameter. No mouse, keyboard or
+text-input synthesis is used. A readback mismatch sends the previously shown
+value back and is reported. Results distinguish accepted sends from verified
+editor readback. Full evidence: `docs/AXE_EDIT_PARAMETER_UPDATE_HANDOFF.md`. The scope is
 `axe_edit_ui`; independent hardware getter and saved-preset persistence are not
 verified by this bridge.
 
@@ -140,9 +151,9 @@ removed on disconnect. No additional MIDI transport is opened.
 Additional focused checks:
 
 ```sh
-xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/EditorToolsTest.mm experiments/embedded-sidebar/EditorTools.mm -o .local/editor-tools-test
+xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/EditorToolsTest.mm experiments/embedded-sidebar/EditorTools.mm experiments/embedded-sidebar/NativeBridge.mm -o .local/editor-tools-test
 .local/editor-tools-test
-xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/MCPServerTest.mm experiments/embedded-sidebar/MCPServer.mm experiments/embedded-sidebar/EditorTools.mm -o .local/sidebar-mcp-test
+xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa experiments/embedded-sidebar/MCPServerTest.mm experiments/embedded-sidebar/MCPServer.mm experiments/embedded-sidebar/EditorTools.mm experiments/embedded-sidebar/NativeBridge.mm -o .local/sidebar-mcp-test
 .local/sidebar-mcp-test
 .local/sidebar-chat-test Codex --tools
 .local/sidebar-chat-test Claude --tools
@@ -156,7 +167,8 @@ Fixture tests are not device evidence.
 
 | Check | Result |
 | --- | --- |
-| Native value parsing, stale/foreign context, Stop, disconnect, idempotency and numeric-entry identity checks | PASS, authored accessibility fixtures |
+| Native-bridge fail-closed, conversion guard, stale context, Stop, disconnect, idempotency and readback-mismatch restore | PASS, authored fixtures |
+| Native write/restore, Amp 1 Gain 2.51 → 2.61 → 2.51 via the editor command path | PASS, live, editor UI readback |
 | Loopback MCP authentication, Origin rejection, tool listing/call, main-thread dispatch and old-token rejection | PASS, local transport test |
 | Codex and Claude invoke the native inspection tool and resume chat | PASS, real local CLIs, no editor attached |
 | Connected preset/grid/scene/selected Amp numeric values | PASS, live Axe-Edit UI |

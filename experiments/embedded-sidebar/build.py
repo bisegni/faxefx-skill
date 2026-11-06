@@ -38,6 +38,7 @@ run('xcrun', 'clang++', '-dynamiclib', '-fobjc-arc', '-fblocks', '-std=c++17', '
     '-framework', 'Cocoa', str(Path(__file__).with_name('Sidebar.m')),
     str(Path(__file__).with_name('ChatAgent.mm')), str(Path(__file__).with_name('ChatPanel.mm')),
     str(Path(__file__).with_name('EditorTools.mm')), str(Path(__file__).with_name('MCPServer.mm')),
+    str(Path(__file__).with_name('NativeBridge.mm')),
     '-o', str(library))
 # A launcher sets the library path only for the copied executable.
 binary.write_text('''#!/bin/sh

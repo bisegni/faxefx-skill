@@ -4,6 +4,7 @@
 #ifndef AXE_SIDEBAR_SELF_TEST
 #import "ChatPanel.h"
 #import "EditorTools.h"
+#import "NativeBridge.h"
 #endif
 #import <objc/runtime.h>
 #include <dlfcn.h>
@@ -167,6 +168,7 @@ static BOOL attach(void) {
         NSView *editor = window.contentView;
 #ifndef AXE_SIDEBAR_SELF_TEST
         [AxeEditorTools shared].editor=editor;
+        (void)[AxeNativeBridge shared]; // verify the executable once, at attach
 #endif
         Dl_info editorImage = {0};
         dladdr((void *)class_getMethodImplementation(object_getClass(editor), @selector(mouseDown:)), &editorImage);
