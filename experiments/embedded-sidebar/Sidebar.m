@@ -70,14 +70,20 @@ static NSRect dockedFrame(NSRect editor, CGFloat width, NSRect screen) {
     NSView *content = panel.contentView;
     content.wantsLayer = YES;
     content.layer.backgroundColor = [NSColor colorWithWhite:0.14 alpha:1].CGColor;
-    NSButton *mode = [NSButton buttonWithTitle:@"" target:self action:@selector(toggleMode:)];
-    mode.bezelStyle = NSBezelStyleRounded;
-    mode.frame = NSMakeRect(8, NSHeight(content.bounds) - 36, NSWidth(content.bounds) - 16, 28);
-    mode.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+    // Detach/Dock lives as a small icon on the right of the title bar.
+    NSButton *mode = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"rectangle.portrait.on.rectangle.portrait"
+        accessibilityDescription:@"Detach"] target:self action:@selector(toggleMode:)];
+    mode.bordered = NO;
+    mode.frame = NSMakeRect(0, 0, 28, 22);
+    NSView *holder = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 36, 22)];
+    [holder addSubview:mode];
+    NSTitlebarAccessoryViewController *accessory = [NSTitlebarAccessoryViewController new];
+    accessory.view = holder;
+    accessory.layoutAttribute = NSLayoutAttributeRight;
+    [panel addTitlebarAccessoryViewController:accessory];
     self.modeButton = mode;
-    [content addSubview:mode];
 #ifndef AXE_SIDEBAR_SELF_TEST
-    NSView *chat = [[AxeChatPanel alloc] initWithFrame:NSMakeRect(0, 0, NSWidth(content.bounds), NSHeight(content.bounds) - 44)];
+    NSView *chat = [[AxeChatPanel alloc] initWithFrame:content.bounds];
     chat.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [content addSubview:chat];
 #endif
@@ -110,12 +116,14 @@ static NSRect dockedFrame(NSRect editor, CGFloat width, NSRect screen) {
         if (NSIsEmptyRect(frame) || !NSIntersectsRect(frame, self.screenFrame))
             frame = NSOffsetRect(dockedFrame(editor.frame, NSWidth(self.panel.frame), self.screenFrame), 24, -24);
         [self.panel setFrame:frame display:YES];
-        self.modeButton.title = @"Dock to Axe-Edit";
+        self.modeButton.image = [NSImage imageWithSystemSymbolName:@"rectangle.portrait.inset.filled" accessibilityDescription:@"Dock to Axe-Edit"];
+        self.modeButton.toolTip = @"Dock to Axe-Edit";
         [self.panel orderFront:nil];
     } else {
         [self snap];
         if (self.panel.parentWindow != editor) [editor addChildWindow:self.panel ordered:NSWindowAbove];
-        self.modeButton.title = @"Detach window";
+        self.modeButton.image = [NSImage imageWithSystemSymbolName:@"rectangle.portrait.on.rectangle.portrait" accessibilityDescription:@"Detach window"];
+        self.modeButton.toolTip = @"Detach into a separate window";
     }
     record(self.detached ? @"chat panel detached" : @"chat panel docked");
 }
