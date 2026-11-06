@@ -1,4 +1,8 @@
-// Embedded AppKit sidebar in a separately signed Axe-Edit copy.
+// Docked AppKit chat panel for a separately signed Axe-Edit copy.
+// Axe-Edit's own window is left untouched: its JUCE peer drives live resizing
+// with a fixed 4:3 constrainer, so the chat lives in a separate panel that is
+// attached as a child window flush against the editor's right edge (or left,
+// when the screen has no room). It can be detached into a free window.
 // Local-agent chat is isolated from device control and MIDI.
 #import <Cocoa/Cocoa.h>
 #ifndef AXE_SIDEBAR_SELF_TEST
@@ -6,15 +10,11 @@
 #import "EditorTools.h"
 #import "NativeBridge.h"
 #endif
-#import <objc/runtime.h>
-#include <dlfcn.h>
 
-static const void *hostKey = &hostKey;
-typedef NSRect (*FrameRectFunction)(id, SEL, NSRect);
-static NSMutableDictionary<NSString *, NSValue *> *originalFrameRects;
-static NSMutableDictionary<NSString *, NSValue *> *originalConstraints;
-static void *editorImageBase;
-static IMP nativeConstrainRect;
+static NSString *const kWidthKey = @"AxeChatPanelWidth";
+static NSString *const kDetachedKey = @"AxeChatPanelDetached";
+static NSString *const kDetachedFrameKey = @"AxeChatPanelDetachedFrame";
+static const CGFloat kMinWidth = 260, kMaxWidth = 700, kDefaultWidth = 360;
 
 static void record(NSString *message) {
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:
@@ -26,192 +26,138 @@ static void record(NSString *message) {
     else { [file seekToEndOfFile]; [file writeData:data]; [file closeFile]; }
 }
 
-@interface AxeSidebarHost : NSView
-@property(nonatomic, strong) NSView *editor;
-@property(nonatomic, strong) NSView *sidebar;
-@property(nonatomic, strong) NSButton *toggle;
-@property(nonatomic) BOOL collapsed;
-@property(nonatomic) BOOL layingOut;
-@property(nonatomic) CGFloat editorAspect;
-@property(nonatomic) FrameRectFunction originalFrameRect;
+static CGFloat clampWidth(CGFloat width) { return MAX(kMinWidth, MIN(kMaxWidth, width)); }
+
+// Frame for the docked panel: same height and vertical position as the editor
+// window, flush to its right edge, or to its left edge when the right side
+// would leave the screen. Pure, for the self-test.
+static NSRect dockedFrame(NSRect editor, CGFloat width, NSRect screen) {
+    width = clampWidth(width);
+    NSRect frame = NSMakeRect(NSMaxX(editor), NSMinY(editor), width, NSHeight(editor));
+    if (NSMaxX(frame) > NSMaxX(screen) && NSMinX(editor) - width >= NSMinX(screen))
+        frame.origin.x = NSMinX(editor) - width;
+    return frame;
+}
+
+@interface AxeChatDock : NSObject <NSWindowDelegate>
+@property(nonatomic, weak) NSWindow *editorWindow;
+@property(nonatomic, strong) NSPanel *panel;
+@property(nonatomic, strong) NSButton *modeButton;
+@property(nonatomic) BOOL detached;
+@property(nonatomic) BOOL placing;
 @end
 
-static NSSize hostSize(AxeSidebarHost *host, NSSize proposed) {
-    CGFloat sidebarWidth = host.collapsed ? 36 : 300;
-    CGFloat editorWidth = MAX(400, proposed.width - sidebarWidth);
-    return NSMakeSize(editorWidth + sidebarWidth, editorWidth * host.editorAspect);
-}
+@implementation AxeChatDock
+- (instancetype)initWithEditorWindow:(NSWindow *)editorWindow {
+    if (!(self = [super init])) return nil;
+    self.editorWindow = editorWindow;
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    double width = [defaults doubleForKey:kWidthKey];
+    NSRect initial = NSMakeRect(0, 0, width > 0 ? clampWidth(width) : kDefaultWidth, NSHeight(editorWindow.frame));
+    NSPanel *panel = [[NSPanel alloc] initWithContentRect:initial
+        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable
+        backing:NSBackingStoreBuffered defer:NO];
+    panel.title = @"Tone Assistant";
+    panel.floatingPanel = NO;               // ordinary level; the child link keeps it beside the editor
+    panel.hidesOnDeactivate = NO;
+    panel.becomesKeyOnlyIfNeeded = NO;      // the chat composer needs keyboard focus
+    panel.releasedWhenClosed = NO;
+    panel.minSize = NSMakeSize(kMinWidth, 300);
+    panel.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    panel.delegate = self;
+    self.panel = panel;
 
-static IMP savedConstraint(id self, SEL selector) {
-    for (Class cls = object_getClass(self); cls; cls = class_getSuperclass(cls)) {
-        NSString *key = [NSString stringWithFormat:@"%@/%@", NSStringFromClass(cls), NSStringFromSelector(selector)];
-        NSValue *saved = originalConstraints[key];
-        if (saved) return (IMP)saved.pointerValue;
+    NSView *content = panel.contentView;
+    content.wantsLayer = YES;
+    content.layer.backgroundColor = [NSColor colorWithWhite:0.14 alpha:1].CGColor;
+    NSButton *mode = [NSButton buttonWithTitle:@"" target:self action:@selector(toggleMode:)];
+    mode.bezelStyle = NSBezelStyleRounded;
+    mode.frame = NSMakeRect(8, NSHeight(content.bounds) - 36, NSWidth(content.bounds) - 16, 28);
+    mode.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+    self.modeButton = mode;
+    [content addSubview:mode];
+#ifndef AXE_SIDEBAR_SELF_TEST
+    NSView *chat = [[AxeChatPanel alloc] initWithFrame:NSMakeRect(0, 0, NSWidth(content.bounds), NSHeight(content.bounds) - 44)];
+    chat.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [content addSubview:chat];
+#endif
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    for (NSNotificationName name in @[NSWindowDidResizeNotification, NSWindowDidMoveNotification,
+                                      NSWindowDidChangeScreenNotification])
+        [center addObserver:self selector:@selector(editorMoved:) name:name object:editorWindow];
+    [center addObserver:self selector:@selector(editorClosing:) name:NSWindowWillCloseNotification object:editorWindow];
+    self.detached = [defaults boolForKey:kDetachedKey];
+    [self applyMode];
+    return self;
+}
+- (NSRect)screenFrame {
+    return (self.editorWindow.screen ?: NSScreen.mainScreen).visibleFrame;
+}
+// Snap beside the editor. Child windows move with their parent automatically;
+// height and side are re-applied after editor resizes and screen changes.
+- (void)snap {
+    if (self.detached || !self.editorWindow) return;
+    self.placing = YES;
+    [self.panel setFrame:dockedFrame(self.editorWindow.frame, NSWidth(self.panel.frame), self.screenFrame) display:YES];
+    self.placing = NO;
+}
+- (void)applyMode {
+    NSWindow *editor = self.editorWindow;
+    if (self.detached) {
+        [editor removeChildWindow:self.panel];
+        NSString *saved = [NSUserDefaults.standardUserDefaults stringForKey:kDetachedFrameKey];
+        NSRect frame = saved ? NSRectFromString(saved) : NSZeroRect;
+        if (NSIsEmptyRect(frame) || !NSIntersectsRect(frame, self.screenFrame))
+            frame = NSOffsetRect(dockedFrame(editor.frame, NSWidth(self.panel.frame), self.screenFrame), 24, -24);
+        [self.panel setFrame:frame display:YES];
+        self.modeButton.title = @"Dock to Axe-Edit";
+        [self.panel orderFront:nil];
+    } else {
+        [self snap];
+        if (self.panel.parentWindow != editor) [editor addChildWindow:self.panel ordered:NSWindowAbove];
+        self.modeButton.title = @"Detach window";
     }
-    return NULL;
+    record(self.detached ? @"chat panel detached" : @"chat panel docked");
 }
-
-static NSRect sidebarConstrainRect(id self, SEL selector, NSRect frame, NSScreen *screen) {
-    AxeSidebarHost *host = objc_getAssociatedObject(self, hostKey);
-    if (!host) return ((NSRect (*)(id, SEL, NSRect, NSScreen *))savedConstraint(self, selector))(self, selector, frame, screen);
-    CGFloat top = NSMaxY(frame);
-    frame.size = hostSize(host, frame.size);
-    frame.origin.y = top - frame.size.height;
-    // Keep AppKit's screen handling, while replacing JUCE's whole-window
-    // aspect constraint with editor-width-plus-sidebar geometry.
-    return ((NSRect (*)(id, SEL, NSRect, NSScreen *))nativeConstrainRect)(self, selector, frame, screen);
+- (void)toggleMode:(id)sender {
+    self.detached = !self.detached;
+    [NSUserDefaults.standardUserDefaults setBool:self.detached forKey:kDetachedKey];
+    [self applyMode];
 }
-
-static NSSize sidebarWillResize(id self, SEL selector, NSWindow *window, NSSize proposed) {
-    AxeSidebarHost *host = objc_getAssociatedObject(self, hostKey);
-    if (host) return hostSize(host, proposed);
-    return ((NSSize (*)(id, SEL, NSWindow *, NSSize))savedConstraint(self, selector))(self, selector, window, proposed);
+- (void)editorMoved:(NSNotification *)note { [self snap]; }
+- (void)editorClosing:(NSNotification *)note { [self.panel orderOut:nil]; }
+// Docked: the user may change only the width; height and edge follow the editor.
+- (NSSize)windowWillResize:(NSWindow *)window toSize:(NSSize)size {
+    if (!self.detached && !self.placing) size.height = NSHeight(self.editorWindow.frame);
+    size.width = clampWidth(size.width);
+    return size;
 }
-
-// JUCE's peer still submits editor-sized content rectangles to its NSWindow.
-// Translate those rectangles to host-sized ones, rather than subtracting the
-// sidebar again on each layout notification. Limit the override to this window.
-static NSRect sidebarFrameRect(id self, SEL selector, NSRect content) {
-    AxeSidebarHost *host = objc_getAssociatedObject(self, hostKey);
-    Dl_info caller = {0};
-    // AppKit also calls this method while calculating native frame margins.
-    // Only JUCE's direct editor-to-window conversion needs the extra width.
-    if (host && dladdr(__builtin_return_address(0), &caller) &&
-        caller.dli_fbase == editorImageBase)
-        content.size.width += host.collapsed ? 36 : 300;
-    // Capture the original IMP at installation. AppKit/KVO may add another
-    // dynamic subclass later; walking the current superclass would find this
-    // override again and recurse (the dragging crash in the v2 experiment).
-    FrameRectFunction original = host.originalFrameRect;
-    for (Class cls = object_getClass(self); !original && cls; cls = class_getSuperclass(cls)) {
-        original = (FrameRectFunction)originalFrameRects[NSStringFromClass(cls)].pointerValue;
-    }
-    return original(self, selector, content);
+- (void)windowDidResize:(NSNotification *)note {
+    [NSUserDefaults.standardUserDefaults setDouble:NSWidth(self.panel.frame) forKey:kWidthKey];
+    if (!self.detached && !self.placing && !self.panel.inLiveResize) [self snap];
 }
-
-static void installWindowTranslation(NSWindow *window, AxeSidebarHost *host) {
-    Class parent = object_getClass(window);
-    if (!nativeConstrainRect) nativeConstrainRect = class_getMethodImplementation(
-        NSWindow.class, @selector(constrainFrameRect:toScreen:));
-    if (!originalFrameRects) originalFrameRects = [NSMutableDictionary dictionary];
-    NSString *name = NSStringFromClass(parent);
-    NSValue *saved = originalFrameRects[name];
-    if (!saved) {
-        Method method = class_getInstanceMethod(parent, @selector(frameRectForContentRect:));
-        saved = [NSValue valueWithPointer:(const void *)method_getImplementation(method)];
-        originalFrameRects[name] = saved;
-        // Preserve the existing isa/KVO chain. Replacing the object's class can
-        // invalidate AppKit's observation bookkeeping during drag or teardown.
-        class_replaceMethod(parent, @selector(frameRectForContentRect:),
-            (IMP)sidebarFrameRect, method_getTypeEncoding(method));
-    }
-    host.originalFrameRect = (FrameRectFunction)saved.pointerValue;
-    objc_setAssociatedObject(window, hostKey, host, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (!originalConstraints) originalConstraints = [NSMutableDictionary dictionary];
-    for (NSString *selectorName in @[@"constrainFrameRect:toScreen:", @"windowWillResize:toSize:"]) {
-        SEL selector = NSSelectorFromString(selectorName);
-        NSString *key = [NSString stringWithFormat:@"%@/%@", name, selectorName];
-        Method method = class_getInstanceMethod(parent, selector);
-        if (method && !originalConstraints[key]) {
-            originalConstraints[key] = [NSValue valueWithPointer:(const void *)method_getImplementation(method)];
-            class_replaceMethod(parent, selector,
-                selector == @selector(constrainFrameRect:toScreen:) ? (IMP)sidebarConstrainRect : (IMP)sidebarWillResize,
-                method_getTypeEncoding(method));
-        }
-    }
-}
-
-@implementation AxeSidebarHost
-- (BOOL)isFlipped { return NO; }
-- (void)resizeSubviewsWithOldSize:(NSSize)oldSize {
-    if (self.layingOut) return;
-    self.layingOut = YES;
-    CGFloat width = self.collapsed ? 36 : 300;
-    NSRect bounds = self.bounds;
-    self.editor.frame = NSMakeRect(0, 0, MAX(1, bounds.size.width - width), bounds.size.height);
-    self.sidebar.frame = NSMakeRect(bounds.size.width - width, 0, width, bounds.size.height);
-    self.toggle.frame = NSMakeRect(5, bounds.size.height - 40, width - 10, 28);
-    for (NSView *view in self.sidebar.subviews) if (view != self.toggle)
-        view.frame = NSMakeRect(0, 0, width, MAX(1, bounds.size.height - 48));
-    record([NSString stringWithFormat:@"layout editor=%@ sidebar=%@",
-        NSStringFromRect(self.editor.frame), NSStringFromRect(self.sidebar.frame)]);
-    self.layingOut = NO;
-}
-- (void)toggleSidebar:(id)sender {
-    self.collapsed = !self.collapsed;
-    for (NSView *view in self.sidebar.subviews)
-        if (view != self.toggle) view.hidden = self.collapsed;
-    self.toggle.title = self.collapsed ? @"‹" : @"Hide sidebar ›";
-    // Preserve the current editor dimensions when toggling. Only the host
-    // width changes, so reopening cannot make the window taller.
-    NSWindow *window = self.window;
-    NSRect frame = window.frame;
-    CGFloat top = NSMaxY(frame);
-    CGFloat width = self.collapsed ? 36 : 300;
-    NSRect screen = (window.screen ?: NSScreen.mainScreen).visibleFrame;
-    CGFloat editorWidth = MIN(self.editor.frame.size.width, screen.size.width - width - 40);
-    frame.size.width = editorWidth + width;
-    frame.size.height = editorWidth * self.editorAspect;
-    frame.origin.x = MIN(MAX(frame.origin.x, screen.origin.x), NSMaxX(screen) - frame.size.width);
-    frame.origin.y = top - frame.size.height;
-    [window setFrame:frame display:YES];
-    [self resizeSubviewsWithOldSize:self.bounds.size];
-    record(self.collapsed ? @"collapsed" : @"expanded");
+- (void)windowDidEndLiveResize:(NSNotification *)note { [self snap]; [self rememberDetachedFrame]; }
+- (void)windowDidMove:(NSNotification *)note { [self rememberDetachedFrame]; }
+- (void)rememberDetachedFrame {
+    if (self.detached)
+        [NSUserDefaults.standardUserDefaults setObject:NSStringFromRect(self.panel.frame) forKey:kDetachedFrameKey];
 }
 @end
+
+static AxeChatDock *dock;
 
 static BOOL attach(void) {
     for (NSWindow *window in NSApp.windows) {
         if (![window.title containsString:@"Axe-Edit III"] || !window.visible ||
-            window.contentView.bounds.size.width < 100) continue;
-        if ([window.contentView isKindOfClass:AxeSidebarHost.class]) return YES;
-        NSView *editor = window.contentView;
+            window.contentView.bounds.size.width < 100 || [window isKindOfClass:NSPanel.class]) continue;
+        if (dock.editorWindow == window) return YES;
 #ifndef AXE_SIDEBAR_SELF_TEST
-        [AxeEditorTools shared].editor=editor;
+        [AxeEditorTools shared].editor = window.contentView;
         (void)[AxeNativeBridge shared]; // verify the executable once, at attach
 #endif
-        Dl_info editorImage = {0};
-        dladdr((void *)class_getMethodImplementation(object_getClass(editor), @selector(mouseDown:)), &editorImage);
-        editorImageBase = editorImage.dli_fbase;
-        NSRect bounds = editor.bounds;
-        AxeSidebarHost *host = [[AxeSidebarHost alloc] initWithFrame:bounds];
-        host.editor = editor;
-        // The shipped editor constrains its layout to 4:3. A restored native
-        // frame can be transiently different while startup layout is running.
-        host.editorAspect = 0.75;
-        host.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        NSView *sidebar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 300, bounds.size.height)];
-        sidebar.wantsLayer = YES;
-        sidebar.layer.backgroundColor = [NSColor colorWithWhite:0.14 alpha:1].CGColor;
-        sidebar.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
-        host.sidebar = sidebar;
-        NSButton *toggle = [NSButton buttonWithTitle:@"Hide sidebar ›" target:host action:@selector(toggleSidebar:)];
-        toggle.bezelStyle = NSBezelStyleRounded;
-        host.toggle = toggle;
-        [sidebar addSubview:toggle];
-#ifndef AXE_SIDEBAR_SELF_TEST
-        [sidebar addSubview:[[AxeChatPanel alloc] initWithFrame:NSMakeRect(0, 0, 300, bounds.size.height - 48)]];
-#endif
-        // Retain the original view before replacing contentView; JUCE still owns its peer.
-        installWindowTranslation(window, host);
-        record([NSString stringWithFormat:@"native aspect=%@ contentAspect=%@",
-            NSStringFromSize(window.aspectRatio), NSStringFromSize(window.contentAspectRatio)]);
-        window.contentView = host;
-        editor.autoresizingMask = NSViewNotSizable;
-        [host addSubview:editor];
-        [host addSubview:sidebar];
-        NSRect screen = (window.screen ?: NSScreen.mainScreen).visibleFrame;
-        CGFloat initialWidth = MIN(1500, screen.size.width - 40);
-        CGFloat initialHeight = (initialWidth - 300) * host.editorAspect;
-        if (initialHeight > screen.size.height - 40) {
-            initialHeight = screen.size.height - 40;
-            initialWidth = initialHeight / host.editorAspect + 300;
-        }
-        [window setFrame:NSMakeRect(screen.origin.x + 20,
-            NSMaxY(screen) - initialHeight - 20, initialWidth, initialHeight) display:YES];
-        [host resizeSubviewsWithOldSize:bounds.size];
-        record([NSString stringWithFormat:@"attached window=%@ originalClass=%@",
-            window.title, NSStringFromClass(editor.class)]);
+        dock = [[AxeChatDock alloc] initWithEditorWindow:window];
+        record([NSString stringWithFormat:@"attached chat panel to window=%@ editorClass=%@",
+            window.title, NSStringFromClass(window.contentView.class)]);
         return YES;
     }
     return NO;
