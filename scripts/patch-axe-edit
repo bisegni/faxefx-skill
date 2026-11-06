@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Find the installed Axe-Edit III, build the Tone Assistant chat library and
+install a separately signed, patched copy (default ~/Applications/Axe-Edit III Chat.app).
+
+The installed Axe-Edit is never modified: it is copied, and the copy launches
+the original executable with the chat library injected. Native knob writes
+work only on Axe-Edit III 1.15.03 arm64 (the library disables them on any other
+build); chat and inspection work regardless.
+
+Usage: scripts/patch-axe-edit [--app PATH] [--output PATH] [--force] [--yes] [--dry-run]
+"""
+import argparse
+import hashlib
+import json
+import os
+import platform
+import plistlib
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+BUNDLE_ID = 'com.FractalAudio.AIIIEdit'
+EXECUTABLE = 'Axe-Edit III'
+SUPPORTED = {('1.15.03', '647ba24fb04c2cfcbcb972b32f338b0422eb87c90ca7898cf26f39e9c5bd8435')}
+DEFAULT_OUTPUT = Path.home() / 'Applications/Axe-Edit III Chat.app'
+SOURCES = ['src/ui/ChatDock.m', 'src/ui/ChatPanel.mm', 'src/agent/ChatAgent.mm',
+           'src/agent/MCPServer.mm', 'src/editor/EditorTools.mm', 'src/editor/NativeBridge.mm']
+LAUNCHER = '''#!/bin/sh
+AXE_PROOF_MACOS_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+export DYLD_INSERT_LIBRARIES="$AXE_PROOF_MACOS_DIR/../Frameworks/AxeSidebarProof.dylib"
+exec "$AXE_PROOF_MACOS_DIR/Axe-Edit III Original" "$@"
+'''
+
+
+def say(message):
+    print(message, flush=True)
+
+
+def fail(message):
+    sys.exit(f'error: {message}')
+
+
+def ask(question, assume_yes):
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        fail(f'{question} (no terminal to answer; pass --yes/--force)')
+    return input(f'{question} [y/N] ').strip().lower() in ('y', 'yes')
+
+
+def run(*args, quiet=False):
+    result = subprocess.run(args, capture_output=quiet, text=True)
+    if result.returncode:
+        fail(f'command failed: {" ".join(map(str, args))}\n{(result.stderr or "").strip()}')
+    return result
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def is_original(app):
+    plist = app / 'Contents/Info.plist'
+    if not plist.is_file() or not (app / 'Contents/MacOS' / EXECUTABLE).is_file():
+        return False
+    info = plistlib.loads(plist.read_bytes())
+    # Skip patched copies (they carry our bundle id and an "Original" binary).
+    return info.get('CFBundleIdentifier') == BUNDLE_ID and not (app / f'Contents/MacOS/{EXECUTABLE} Original').exists()
+
+
+def find_app(explicit, assume_yes):
+    if explicit:
+        app = Path(explicit).expanduser().resolve()
+        if not is_original(app):
+            fail(f'{app} is not an unpatched Axe-Edit III application')
+        return app
+    candidates = [Path('/Applications/Axe-Edit III.app'), Path.home() / 'Applications/Axe-Edit III.app']
+    found = subprocess.run(['mdfind', f"kMDItemCFBundleIdentifier == '{BUNDLE_ID}'"], capture_output=True, text=True)
+    candidates += [Path(line) for line in found.stdout.splitlines() if line.endswith('.app')]
+    apps = []
+    for app in candidates:
+        if app.exists() and is_original(app) and app.resolve() not in apps:
+            apps.append(app.resolve())
+    if not apps:
+        fail('Axe-Edit III was not found. Install it from fractalaudio.com, or pass --app PATH.')
+    if len(apps) == 1 or assume_yes:
+        return apps[0]
+    for index, app in enumerate(apps, 1):
+        say(f'  {index}. {app}')
+    choice = input(f'Which Axe-Edit should be patched? [1-{len(apps)}] ').strip()
+    if not choice.isdigit() or not 1 <= int(choice) <= len(apps):
+        fail('no Axe-Edit selected')
+    return apps[int(choice) - 1]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    parser.add_argument('--app', help='Axe-Edit III.app to copy (default: search)')
+    parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT, help=f'patched copy (default: {DEFAULT_OUTPUT})')
+    parser.add_argument('--force', action='store_true', help='replace an existing patched copy without asking')
+    parser.add_argument('--yes', action='store_true', help='answer yes to version and selection prompts')
+    parser.add_argument('--dry-run', action='store_true', help='check and report, write nothing')
+    args = parser.parse_args()
+
+    if sys.platform != 'darwin':
+        fail('macOS is required')
+    if shutil.which('xcrun') is None or subprocess.run(['xcrun', '--find', 'clang++'], capture_output=True).returncode:
+        fail('Xcode Command Line Tools are required: run  xcode-select --install')
+    if platform.machine() != 'arm64':
+        say('warning: this Mac is not arm64; chat works but native knob writes stay disabled.')
+
+    app = find_app(args.app, args.yes)
+    binary = app / 'Contents/MacOS' / EXECUTABLE
+    version = plistlib.loads((app / 'Contents/Info.plist').read_bytes()).get('CFBundleShortVersionString', '?')
+    digest = sha256(binary)
+    supported = (version, digest) in SUPPORTED
+    output = args.output.expanduser().resolve()
+    say(f'Axe-Edit:   {app}')
+    say(f'Version:    {version}  sha256 {digest[:12]}…')
+    say(f'Knob writes: {"supported" if supported else "DISABLED (only Axe-Edit III 1.15.03 is verified)"}')
+    say(f'Output:     {output}')
+    if output.resolve() == app.resolve() or app in output.parents:
+        fail('output must not be the original Axe-Edit')
+    if not supported and not ask('This Axe-Edit build is not verified: the agent can chat and inspect, but not change knobs. Continue?', args.yes):
+        sys.exit(1)
+    if output.exists() and not args.dry_run:
+        if not (output / f'Contents/MacOS/{EXECUTABLE} Original').exists():
+            fail(f'{output} exists and is not a patched copy; refusing to replace it')
+        if not ask(f'Replace the existing patched copy at {output}?', args.force):
+            sys.exit(1)
+    if args.dry_run:
+        say('Dry run: nothing written.')
+        return
+
+    with tempfile.TemporaryDirectory(prefix='axe-edit-chat-', dir=output.parent if output.parent.exists() else None) as temp:
+        staged = Path(temp) / output.name
+        say('Copying Axe-Edit…')
+        run('ditto', str(app), str(staged))
+        copy_binary = staged / 'Contents/MacOS' / EXECUTABLE
+        copy_binary.rename(copy_binary.with_name(f'{EXECUTABLE} Original'))
+        library = staged / 'Contents/Frameworks/AxeSidebarProof.dylib'
+        library.parent.mkdir(parents=True, exist_ok=True)
+        say('Building the chat library…')
+        includes = [f'-I{ROOT / part}' for part in ('src/agent', 'src/editor', 'src/ui')]
+        run('xcrun', 'clang++', '-dynamiclib', '-fobjc-arc', '-fblocks', '-std=c++17', '-x', 'objective-c++',
+            '-arch', 'arm64', '-arch', 'x86_64', '-mmacosx-version-min=12.0', '-framework', 'Cocoa',
+            *includes, *[str(ROOT / source) for source in SOURCES], '-o', str(library))
+        copy_binary.write_text(LAUNCHER)
+        copy_binary.chmod(0o755)
+        info_path = staged / 'Contents/Info.plist'
+        info = plistlib.loads(info_path.read_bytes())
+        info.update(CFBundleIdentifier='org.axestudio.axe-edit-chat', CFBundleName='Axe-Edit III Chat',
+                    CFBundleDisplayName='Axe-Edit III Chat')
+        info_path.write_bytes(plistlib.dumps(info))
+        # Written before signing: any later change would invalidate the signature.
+        manifest = {'app': str(output), 'source_app': str(app), 'source_version': version,
+                    'source_sha256': digest, 'native_knob_writes': supported, 'repository': str(ROOT)}
+        (staged / 'Contents/Resources/AxeChatManifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+        say('Signing the copy (ad hoc)…')
+        # Remove inherited runtime restrictions only on the copy, then sign it.
+        run('codesign', '--force', '--sign', '-', '--options', '0', str(staged / f'Contents/MacOS/{EXECUTABLE} Original'), quiet=True)
+        run('codesign', '--force', '--sign', '-', str(library), quiet=True)
+        run('codesign', '--force', '--deep', '--sign', '-', '--options', '0', str(staged), quiet=True)
+        run('codesign', '--verify', '--deep', '--strict', str(staged), quiet=True)
+        if sha256(binary) != digest:
+            fail('the installed Axe-Edit changed during patching; nothing was installed')
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if output.exists():
+            shutil.rmtree(output)
+        shutil.move(str(staged), str(output))
+    say(f'\nInstalled {output}')
+    say(f'Launch:  open "{output}"')
+    say('Quit the regular Axe-Edit first: only one editor should talk to the Axe-Fx.')
+
+
+if __name__ == '__main__':
+    main()

@@ -1,6 +1,8 @@
 # Axe-Edit parameter-update research handoff
 
-## Update, 2026-11-05 (later): implemented in `experiments/embedded-sidebar/NativeBridge.mm`
+> Paths below the update refer to the pre-cleanup layout (`experiments/embedded-sidebar/`, `src/crates/`); that code now lives in `src/` or was removed.
+
+## Update, 2026-11-05 (later): implemented in `src/editor/NativeBridge.mm`
 
 With renewed user authorization (passive observation, then one bounded
 write/restore, no Store), the open questions below were answered:

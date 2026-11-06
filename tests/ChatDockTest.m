@@ -1,6 +1,6 @@
 // Regression: docked chat-panel geometry and window behaviour, without Axe-Edit.
 #define AXE_SIDEBAR_SELF_TEST 1
-#import "Sidebar.m"
+#import "ChatDock.m"
 #include <assert.h>
 
 int main(void) {

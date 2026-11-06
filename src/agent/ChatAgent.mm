@@ -1,4 +1,4 @@
-// Native local-agent transport. Protocol reference: src/crates/agents/.
+// Native local-agent transport: Codex App Server (JSON-RPC over stdio) and Claude stream-json with a private loopback MCP server.
 #import "ChatAgent.h"
 #import "EditorTools.h"
 #import "MCPServer.h"

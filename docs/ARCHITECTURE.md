@@ -1,26 +1,30 @@
-# Embedded Axe-Edit chat
+# Architecture
 
-This local macOS experiment adds a docked AppKit chat panel to a separate copy
+This project adds a docked AppKit chat panel to a separate copy
 of Axe-Edit III. The installed app is neither patched nor re-signed. The panel
 contains native Objective-C++ chat connected to the installed Codex or Claude
-CLI through its existing local account login. No Rust helper or API-key entry
-is involved. The agent can inspect the connected Axe-Fx and use scoped native
+CLI through its existing local account login. No API-key entry is involved. The agent can inspect the connected Axe-Fx and use scoped native
 controls to change parameters, bypass, channels and scenes. Audio processing
 is not connected.
 
-Run from the repository root:
+`scripts/patch-axe-edit` finds the installed Axe-Edit III, compiles a
+universal arm64/x86_64 library from `src/`, copies the app to
+`~/Applications/Axe-Edit III Chat.app` (asking before replacing an earlier
+copy), adds a local launcher, and applies ad-hoc signatures to the copy. The
+copy omits the vendor's hardened runtime configuration to load this library.
+The installed app keeps its original signature and runtime configuration, and
+the script verifies its hash is unchanged. No system security setting is
+changed.
 
-```sh
-python3 experiments/embedded-sidebar/build.py --output .local/axe-edit-tone-agent
-open '.local/axe-edit-tone-agent/Axe-Edit III Chat.app'
-```
-
-Choose a new output path for another build; the builder refuses to overwrite an
-existing output directory. It compiles a
-universal arm64/x86_64 library, copies the installed app, adds a local launcher,
-and applies ad-hoc signatures to the copy. The copy omits the vendor's hardened
-runtime configuration to load this library. The installed app keeps its original
-signature and runtime configuration. No system security setting is changed.
+| Path | Role |
+| --- | --- |
+| `src/ui/ChatDock.m` | Finds the Axe-Edit window and docks the Tone Assistant panel beside it |
+| `src/ui/ChatPanel.mm` | Chat view: header, transcript, composer, busy indicator |
+| `src/agent/ChatAgent.mm` | Local Codex (App Server) and Claude (stream-json) sessions |
+| `src/agent/MCPServer.mm` | Private loopback MCP server exposing the Axe-Fx tools to Claude |
+| `src/editor/EditorTools.mm` | Tool schemas, system prompt, inspection and guarded mutations |
+| `src/editor/NativeBridge.mm` | Version-pinned native parameter writes through Axe-Edit's command path |
+| `tests/` | Fixture tests run by `scripts/test` |
 
 The copied editor keeps Axe-Edit's ordinary device communications and may share
 the vendor's existing user preferences. A copied bundle is not a sandbox or a
@@ -57,9 +61,9 @@ entered chat messages and the actual Axe-Edit context requested through its
 scoped tools. Audio is not attached.
 
 `ChatPanel.mm` owns AppKit controls. `ChatAgent.mm` implements the local-agent
-protocols, based on the existing Rust adapters in `src/crates/agents/`.
+protocols.
 
-The chat lives in its own **Tone Assistant** panel (`Sidebar.m`). Axe-Edit's
+The chat lives in its own **Tone Assistant** panel (`src/ui/ChatDock.m`). Axe-Edit's
 window is left completely stock: its JUCE peer drives live resizing with a
 fixed 4:3 constrainer, and every attempt to share that window with a pane
 fought it (snapping, then a frozen resize when JUCE's frame requests were
@@ -100,7 +104,8 @@ Tested with installed Axe-Edit III 1.15.03 on arm64 macOS:
 Installed executable SHA-256:
 `647ba24fb04c2cfcbcb972b32f338b0422eb87c90ca7898cf26f39e9c5bd8435`
 
-The builder records identity in the chosen output directory's `manifest.json`.
+The patcher records the source app's path, version and hash in the copy's
+`Contents/Resources/AxeChatManifest.json`.
 Attachment and panel logs are in `~/Library/Logs/AxeEditSidebarProof.log`.
 Application updates can change the window/view structure; this proof does not
 establish a stable vendor extension interface.
