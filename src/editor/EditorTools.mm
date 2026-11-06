@@ -160,6 +160,7 @@ static NSString *parameterName(NSString *label) {
 }
 - (NSDictionary *)inspect {
     NSArray *nodes=[self nodes];
+    if([self.writer respondsToSelector:@selector(calibrateWithAccessibilityNodes:)]) [self.writer calibrateWithAccessibilityNodes:nodes];
     BOOL connected=NO;
     NSMutableArray *blocks=[NSMutableArray array], *parameters=[NSMutableArray array], *scenes=[NSMutableArray array];
     NSMutableDictionary *context=[NSMutableDictionary dictionary];

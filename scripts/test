@@ -19,4 +19,6 @@ run chat-agent     $CXX tests/ChatAgentTest.mm src/agent/MCPServer.mm $CORE
 run chat-panel     $CXX tests/ChatPanelTest.mm src/agent/ChatAgent.mm src/agent/MCPServer.mm src/ui/AudioStrip.mm src/audio/AudioRecorder.mm $CORE
 run audio-analysis $CXX tests/AudioAnalysisTest.mm src/audio/AudioAnalysis.mm
 run audio-tools    $CXX tests/AudioToolsTest.mm $CORE
+run bridge-calibration $CXX tests/BridgeCalibrationTest.mm $CORE
+echo "== discovery"; python3 -I tests/test_discovery.py
 echo "All native tests passed."

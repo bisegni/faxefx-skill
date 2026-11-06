@@ -1,6 +1,7 @@
 #import "ChatPanel.h"
 #import "ChatAgent.h"
 #import "AudioStrip.h"
+#import "NativeBridge.h"
 #import <QuartzCore/QuartzCore.h>
 
 // Layout metrics (points, flipped coordinates).
@@ -46,6 +47,7 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
 @property(nonatomic, strong) NSButton *connect;
 @property(nonatomic, strong) NSButton *clearButton;
 @property(nonatomic, strong) AxeAudioStrip *audioStrip;
+@property(nonatomic, strong) NSButton *enableWrites;
 @property(nonatomic, strong) NSBox *headerRule;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSProgressIndicator *spinner;
@@ -87,6 +89,10 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
         _audioStrip = [[AxeAudioStrip alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, 28)];
         __weak AxeChatPanel *weakPanel = self;
         _audioStrip.heightChanged = ^{ [weakPanel resizeSubviewsWithOldSize:weakPanel.bounds.size]; };
+        // Shown only for an auto-detected Axe-Edit build whose writes are not enabled yet.
+        _enableWrites = [NSButton buttonWithTitle:@"New Axe-Edit build detected — enable knob changes…" target:self action:@selector(enableKnobWrites:)];
+        _enableWrites.controlSize = NSControlSizeSmall; _enableWrites.font = [NSFont systemFontOfSize:11];
+        _enableWrites.contentTintColor = NSColor.systemYellowColor; _enableWrites.bordered = NO;
         _headerRule = [[NSBox alloc] initWithFrame:NSZeroRect];
         _headerRule.boxType = NSBoxSeparator;
         _statusLabel = label(_agent.status, 11, NSColor.secondaryLabelColor);
@@ -123,7 +129,7 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
         _actionButton.imagePosition = NSImageOnly;
         _hint = label(@"Return to send · Shift-Return for a new line · Preset Save stays manual", 10, NSColor.tertiaryLabelColor);
 
-        for (NSView *view in @[_statusDot, _provider, _connect, _clearButton, _audioStrip, _headerRule, _statusLabel, _spinner, _historyScroll,
+        for (NSView *view in @[_statusDot, _provider, _connect, _clearButton, _audioStrip, _enableWrites, _headerRule, _statusLabel, _spinner, _historyScroll,
                                _composerField, _composerScroll, _placeholder, _actionButton, _hint])
             [self addSubview:view];
         __weak AxeChatPanel *weakSelf = self;
@@ -167,7 +173,10 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
     self.actionButton.frame = NSMakeRect(NSMaxX(self.composerField.frame) - kActionSize - 6,
                                          NSMaxY(self.composerField.frame) - kActionSize - 6, kActionSize, kActionSize);
     self.hint.frame = NSMakeRect(kPad + 2, height - kFooter + 3, inner - 4, 14);
-    CGFloat stripTop = kHeader + kStatus + 4, stripHeight = [self.audioStrip preferredHeight];
+    BOOL needsEnable = [AxeNativeBridge shared].needsUserEnable;
+    self.enableWrites.hidden = !needsEnable;
+    self.enableWrites.frame = NSMakeRect(kPad, kHeader + kStatus + 2, inner, 18);
+    CGFloat stripTop = kHeader + kStatus + 4 + (needsEnable ? 20 : 0), stripHeight = [self.audioStrip preferredHeight];
     self.audioStrip.frame = NSMakeRect(0, stripTop, width, stripHeight);
     [self.audioStrip resizeSubviewsWithOldSize:self.audioStrip.bounds.size];
     CGFloat historyTop = stripTop + stripHeight + 4;
@@ -278,6 +287,16 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
     if (flags & (NSEventModifierFlagShift | NSEventModifierFlagOption)) return NO;
     [self sendMessage:nil];
     return YES;
+}
+- (void)enableKnobWrites:(id)sender {
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Enable knob changes for this Axe-Edit build?";
+    alert.informativeText = @"This Axe-Edit version was not hand-verified. The patcher located its parameter command automatically and the layout was checked against Axe-Edit's own firmware definitions. Every change is still read back, restored on mismatch and undoable with ⌘Z. Try one small change first and check the knob moves as expected.";
+    [alert addButtonWithTitle:@"Enable"]; [alert addButtonWithTitle:@"Not Now"];
+    void (^done)(NSModalResponse) = ^(NSModalResponse response) {
+        if (response == NSAlertFirstButtonReturn) { [[AxeNativeBridge shared] enableWritesForThisBuild]; [self resizeSubviewsWithOldSize:self.bounds.size]; }
+    };
+    if (self.window) [alert beginSheetModalForWindow:self.window completionHandler:done]; else done([alert runModal]);
 }
 - (void)clearChat:(id)sender {
     if (self.agent.busy) return;

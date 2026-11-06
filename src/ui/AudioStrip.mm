@@ -43,6 +43,7 @@ static NSTextField *text(NSString *value, CGFloat size, NSColor *color) {
 @property(nonatomic, strong) NSBox *rule;
 @property(nonatomic, strong) AVAudioPlayer *player;
 @property(nonatomic, copy) NSString *playing;
+@property(nonatomic) BOOL reloadPending;
 @end
 
 @implementation AxeAudioStrip
@@ -141,7 +142,17 @@ static NSTextField *text(NSString *value, CGFloat size, NSColor *color) {
 }
 
 #pragma mark Clip rows
-- (void)clipsChanged:(NSNotification *)note { [self reloadClips]; [self changedHeight]; }
+// Rebuild on the next main-loop turn: the change may come from a row's own
+// button (delete), and tearing that button down inside its action crashes.
+- (void)clipsChanged:(NSNotification *)note {
+    if (self.reloadPending) return;
+    self.reloadPending = YES;
+    __weak AxeAudioStrip *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        AxeAudioStrip *strip = weakSelf; if (!strip) return;
+        strip.reloadPending = NO; [strip reloadClips]; [strip changedHeight];
+    });
+}
 - (void)reloadClips {
     for (NSView *row in self.list.subviews.copy) [row removeFromSuperview];
     NSUInteger index = 0;
@@ -187,8 +198,10 @@ static NSTextField *text(NSString *value, CGFloat size, NSColor *color) {
     [self.clips setRole:sender.selectedSegment == 0 ? @"reference" : @"current" forClip:sender.identifier];
 }
 - (void)removeClip:(NSButton *)sender {
-    if ([sender.identifier isEqual:self.playing]) [self stopPlayback];
-    [self.clips removeClip:sender.identifier];
+    NSString *identifier = sender.identifier;
+    if ([identifier isEqual:self.playing]) [self stopPlayback];
+    [self.clips removeClip:identifier];
+    [self showMessage:nil settings:NO];   // the hint may name the deleted take
 }
 - (void)play:(NSButton *)sender {
     NSString *identifier = sender.identifier;

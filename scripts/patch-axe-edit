@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import importlib.util
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE_ID = 'com.FractalAudio.AIIIEdit'
@@ -30,6 +31,13 @@ SOURCES = ['src/ui/ChatDock.m', 'src/ui/ChatPanel.mm', 'src/ui/AudioStrip.mm', '
            'src/agent/MCPServer.mm', 'src/editor/EditorTools.mm', 'src/editor/NativeBridge.mm',
            'src/audio/AudioAnalysis.mm', 'src/audio/AudioClips.mm', 'src/audio/AudioRecorder.mm', 'src/audio/AudioTools.mm']
 FRAMEWORKS = ['Cocoa', 'AVFoundation', 'Accelerate', 'CoreMedia', 'UniformTypeIdentifiers']
+# Static discovery of the parameter-command path (scripts/discover_axe_edit.py).
+_spec = importlib.util.spec_from_file_location('discover_axe_edit', Path(__file__).with_name('discover_axe_edit.py'))
+discovery = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(discovery)
+# Hand-verified 1.15.03 values; discovery must reproduce them on that build.
+VERIFIED_PROFILE = {'command_method': 0x1000C8D9C, 'comm_slot': 0x1011401A8, 'content_vtable': 0x1011682D8,
+                    'content_comm_vtable': 0x1011685C0, 'content_comm_offset': 0x118}
 LAUNCHER = '''#!/bin/sh
 AXE_PROOF_MACOS_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 export DYLD_INSERT_LIBRARIES="$AXE_PROOF_MACOS_DIR/../Frameworks/AxeSidebarProof.dylib"
@@ -109,6 +117,7 @@ def main():
     parser.add_argument('--force', action='store_true', help='replace an existing patched copy without asking')
     parser.add_argument('--yes', action='store_true', help='answer yes to version and selection prompts')
     parser.add_argument('--dry-run', action='store_true', help='check and report, write nothing')
+    parser.add_argument('--discover', action='store_true', help='only locate the parameter-command path and print the profile')
     args = parser.parse_args()
 
     if sys.platform != 'darwin':
@@ -126,12 +135,35 @@ def main():
     output = args.output.expanduser().resolve()
     say(f'Axe-Edit:   {app}')
     say(f'Version:    {version}  sha256 {digest[:12]}…')
-    say(f'Knob writes: {"supported" if supported else "DISABLED (only Axe-Edit III 1.15.03 is verified)"}')
+    say('Locating the parameter-command path…')
+    try:
+        profile = discovery.discover(app)
+    except (discovery.DiscoveryError, OSError, KeyError) as error:
+        profile, problem = None, str(error)
+    if profile:
+        for key in ('command_method', 'comm_slot', 'content_vtable', 'content_comm_vtable'):
+            say(f'  {key:20} {profile[key]:#x}')
+        say(f'  {"content_comm_offset":20} {profile["content_comm_offset"]:#x}   ({profile["command_method_users"]} vtable users)')
+    else:
+        say(f'  not found: {problem}')
+    if supported and (not profile or any(profile[k] != v for k, v in VERIFIED_PROFILE.items())):
+        fail('discovery disagrees with the hand-verified 1.15.03 profile; refusing to build (report this)')
+    if args.discover:
+        if profile:
+            say(json.dumps({k: v for k, v in profile.items() if k != 'executable'}, indent=2))
+        sys.exit(0 if profile else 1)
+    level = 'supported (hand-verified build)' if supported else (
+        'auto-detected: enable once in the panel after a check' if profile else 'DISABLED: parameter-command path not found')
+    say(f'Knob writes: {level}')
     say(f'Output:     {output}')
     if output.resolve() == app.resolve() or app in output.parents:
         fail('output must not be the original Axe-Edit')
-    if not supported and not ask('This Axe-Edit build is not verified: the agent can chat and inspect, but not change knobs. Continue?', args.yes):
-        sys.exit(1)
+    if not supported:
+        question = ('This Axe-Edit build was not hand-verified. Knob writes were located automatically and stay off until you '
+                    'enable them in the panel. Continue?') if profile else (
+                    'Knob writes are unavailable for this Axe-Edit build; the agent can chat, inspect and analyse audio. Continue?')
+        if not ask(question, args.yes):
+            sys.exit(1)
     if output.exists() and not args.dry_run:
         if not (output / f'Contents/MacOS/{EXECUTABLE} Original').exists():
             fail(f'{output} exists and is not a patched copy; refusing to replace it')
@@ -164,8 +196,12 @@ def main():
                     NSMicrophoneUsageDescription='Record your guitar from an audio input (such as the Axe-Fx III USB audio) to compare your tone with a reference. Audio stays on this Mac.')
         info_path.write_bytes(plistlib.dumps(info))
         # Written before signing: any later change would invalidate the signature.
-        manifest = {'app': str(output), 'source_app': str(app), 'source_version': version,
-                    'source_sha256': digest, 'native_knob_writes': supported, 'repository': str(ROOT)}
+        if profile:
+            shipped = {k: v for k, v in profile.items() if k != 'executable'}
+            (staged / 'Contents/Resources/AxeBridgeProfile.json').write_text(json.dumps(shipped, indent=2) + '\n')
+        manifest = {'app': str(output), 'source_app': str(app), 'source_version': version, 'source_sha256': digest,
+                    'native_knob_writes': 'verified' if supported else ('discovered' if profile else 'unavailable'),
+                    'repository': str(ROOT)}
         (staged / 'Contents/Resources/AxeChatManifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         say('Signing the copy (ad hoc)…')
         # Remove inherited runtime restrictions only on the copy, then sign it.

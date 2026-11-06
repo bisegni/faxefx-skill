@@ -11,8 +11,8 @@ never modified.
 ## Requirements
 
 - macOS on Apple silicon.
-- Axe-Edit III **1.15.03**. Other versions can still chat and inspect, but knob
-  changes are disabled (see Safety).
+- Axe-Edit III for Apple silicon. 1.15.03 is hand-verified; other builds are
+  analysed automatically when patched (see Safety).
 - Xcode Command Line Tools: `xcode-select --install`.
 - A logged-in [Codex](https://github.com/openai/codex) CLI (`codex login`), or
   Claude Code (`claude auth login`).
@@ -25,7 +25,8 @@ scripts/patch-axe-edit
 
 The script:
 1. Finds Axe-Edit: `/Applications`, then `~/Applications`, then Spotlight.
-2. Checks its version and code hash.
+2. Checks its version and scans the program for the editor's knob-change
+   method (`--discover` prints just this report).
 3. Builds the chat library from `src/`.
 4. Installs `~/Applications/Axe-Edit III Chat.app`.
 
@@ -71,9 +72,18 @@ Re-run it after pulling changes; it asks before replacing the previous copy.
 - **Knob changes are normal Axe-Edit edits.** They go through the same command
   as typing into a knob, so **⌘Z undoes them**. The agent never saves or stores
   presets; saving stays up to you.
-- **Writes are pinned to Axe-Edit III 1.15.03 arm64.** On any other build the
-  library disables writes by itself, after checking the code hash, type
-  information and vtable.
+- **Each build gets its own checked profile.** When patching, the script
+  locates Axe-Edit's knob-change method in the program itself and stores the
+  result in the copy, tied to that exact build's code hash. At startup the
+  library refuses the profile if the code differs or the expected classes and
+  method tables are not found in memory.
+  - **1.15.03 (hand-verified):** knob changes work immediately; the patcher
+    refuses to build if discovery ever disagrees with the verified values.
+  - **Other builds:** the remaining memory offsets are learned from the visible
+    knobs and accepted only if they match Axe-Edit's own firmware definitions.
+    Knob changes stay off until you enable them once from the yellow line in
+    the panel (remembered for that build). If discovery or calibration fails,
+    chat and inspection still work, but knob changes stay disabled.
 - **Every write is checked first and read back after.** Each write requires
   the current value and a range verified against Axe-Edit's own firmware
   definitions. Model selection and list parameters are refused.

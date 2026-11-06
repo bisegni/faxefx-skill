@@ -7,6 +7,9 @@ typedef void (^AxeToolReply)(NSDictionary *result);
 @protocol AxeParameterWriter <NSObject>
 - (NSDictionary *)parameterForAccessibilityNode:(id)node failure:(NSString **)failure;
 - (BOOL)setDisplayValue:(double)value forAccessibilityNode:(id)node failure:(NSString **)failure;
+@optional
+/// Learn memory-layout offsets from the visible controls (no-op once known).
+- (void)calibrateWithAccessibilityNodes:(NSArray *)nodes;
 @end
 
 @interface AxeEditorTools : NSObject

@@ -154,16 +154,36 @@ static NSRect dockedFrame(NSRect editor, CGFloat width, NSRect screen) {
 
 static AxeChatDock *dock;
 
+static NSRect lastEditorFrame;
+
 static BOOL attach(void) {
     for (NSWindow *window in NSApp.windows) {
         if (![window.title containsString:@"Axe-Edit III"] || !window.visible ||
             window.contentView.bounds.size.width < 100 || [window isKindOfClass:NSPanel.class]) continue;
         if (dock.editorWindow == window) return YES;
+        // JUCE places and sizes its window in steps at launch; attaching
+        // before it settles leaves the panel beside a stale frame. Wait
+        // until the frame is the same on two consecutive ticks.
+        if (!NSEqualRects(window.frame, lastEditorFrame)) { lastEditorFrame = window.frame; return NO; }
 #ifndef AXE_SIDEBAR_SELF_TEST
         [AxeEditorTools shared].editor = window.contentView;
         (void)[AxeNativeBridge shared]; // verify the executable once, at attach
 #endif
         dock = [[AxeChatDock alloc] initWithEditorWindow:window];
+        // Re-snap a few times while the editor finishes its launch layout.
+        for (NSNumber *delay in @[@0.5, @1.5, @3])
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                if (!dock.detached) [dock applyMode];
+            });
+#ifndef AXE_SIDEBAR_SELF_TEST
+        // Learn/cross-check the knob memory layout as soon as an effect with
+        // knobs is on screen (read-only; inspection walks the AX tree).
+        [NSTimer scheduledTimerWithTimeInterval:2 repeats:YES block:^(NSTimer *timer) {
+            AxeNativeBridge *bridge = [AxeNativeBridge shared];
+            if (bridge.calibrationSettled) { [timer invalidate]; return; }
+            [[AxeEditorTools shared] inspect];
+        }];
+#endif
         record([NSString stringWithFormat:@"attached chat panel to window=%@ editorClass=%@",
             window.title, NSStringFromClass(window.contentView.class)]);
         return YES;
