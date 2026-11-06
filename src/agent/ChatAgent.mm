@@ -403,6 +403,22 @@ static NSArray<NSString *> *disabledFeatures(void) {
     self.threadParams = nil; self.resumeRequestID = nil;
     self.status = @"Disconnected · conversation saved locally"; [self notify];
 }
+// Start a fresh conversation: forget the transcript and the provider session
+// (so the next turn opens a new thread instead of resuming), then reconnect if
+// the agent was connected. Refused while a reply is running.
+- (BOOL)clear {
+    if (self.busy) return NO;
+    BOOL wasConnected = self.connected; NSString *provider = self.provider;
+    if (wasConnected) [self disconnect];
+    if (!self.directory) self.directory = [self.storageRoot URLByAppendingPathComponent:provider];
+    [NSFileManager.defaultManager createDirectoryAtURL:self.directory withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil];
+    [self.entries removeAllObjects];
+    self.session = nil;
+    [self persist];
+    if (wasConnected) [self connectProvider:provider];
+    else { self.status = @"Conversation cleared"; [self notify]; }
+    return YES;
+}
 - (void)dealloc {
     [self.mcp stop];
     if(self.mcpConfig) [NSFileManager.defaultManager removeItemAtURL:self.mcpConfig error:nil];

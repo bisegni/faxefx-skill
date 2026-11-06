@@ -15,6 +15,15 @@ int main(void) {
             panel.composer.string = @"Native composer test";
             assert([panel.composer.string isEqual:@"Native composer test"]);
         }
+        // The Audio strip collapses to one row and expands below the status line.
+        panel.frame = NSMakeRect(0, 0, 360, 852);
+        panel.audioStrip.expanded = NO; [panel resizeSubviewsWithOldSize:NSZeroSize];
+        CGFloat collapsed = panel.audioStrip.frame.size.height;
+        panel.audioStrip.expanded = YES; [panel resizeSubviewsWithOldSize:NSZeroSize];
+        assert(collapsed == 28 && panel.audioStrip.frame.size.height > collapsed);
+        assert(NSMaxY(panel.audioStrip.frame) <= NSMinY(panel.historyScroll.frame));
+        panel.audioStrip.expanded = NO;
+        puts("PASS: audio strip collapses/expands above the transcript");
         puts("PASS: composer and transcript document widths, compact layouts and text retention");
     }
     return 0;

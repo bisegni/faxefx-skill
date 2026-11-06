@@ -1,5 +1,6 @@
 #import "ChatPanel.h"
 #import "ChatAgent.h"
+#import "AudioStrip.h"
 #import <QuartzCore/QuartzCore.h>
 
 // Layout metrics (points, flipped coordinates).
@@ -43,6 +44,8 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
 @property(nonatomic, strong) NSView *statusDot;
 @property(nonatomic, strong) NSPopUpButton *provider;
 @property(nonatomic, strong) NSButton *connect;
+@property(nonatomic, strong) NSButton *clearButton;
+@property(nonatomic, strong) AxeAudioStrip *audioStrip;
 @property(nonatomic, strong) NSBox *headerRule;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSProgressIndicator *spinner;
@@ -76,6 +79,14 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
         _connect = [NSButton buttonWithTitle:@"Connect" target:self action:@selector(connectAgent:)];
         _connect.controlSize = NSControlSizeSmall;
         _connect.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+        NSImage *compose = [NSImage imageWithSystemSymbolName:@"square.and.pencil" accessibilityDescription:@"New chat"];
+        _clearButton = [NSButton buttonWithImage:[compose imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:13 weight:NSFontWeightMedium]]
+            target:self action:@selector(clearChat:)];
+        _clearButton.bordered = NO; _clearButton.contentTintColor = NSColor.secondaryLabelColor;
+        _clearButton.toolTip = @"New chat (clears this conversation)";
+        _audioStrip = [[AxeAudioStrip alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, 28)];
+        __weak AxeChatPanel *weakPanel = self;
+        _audioStrip.heightChanged = ^{ [weakPanel resizeSubviewsWithOldSize:weakPanel.bounds.size]; };
         _headerRule = [[NSBox alloc] initWithFrame:NSZeroRect];
         _headerRule.boxType = NSBoxSeparator;
         _statusLabel = label(_agent.status, 11, NSColor.secondaryLabelColor);
@@ -112,7 +123,7 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
         _actionButton.imagePosition = NSImageOnly;
         _hint = label(@"Return to send · Shift-Return for a new line · Preset Save stays manual", 10, NSColor.tertiaryLabelColor);
 
-        for (NSView *view in @[_statusDot, _provider, _connect, _headerRule, _statusLabel, _spinner, _historyScroll,
+        for (NSView *view in @[_statusDot, _provider, _connect, _clearButton, _audioStrip, _headerRule, _statusLabel, _spinner, _historyScroll,
                                _composerField, _composerScroll, _placeholder, _actionButton, _hint])
             [self addSubview:view];
         __weak AxeChatPanel *weakSelf = self;
@@ -139,7 +150,8 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
     // Header: status dot, agent picker, connect button.
     self.statusDot.frame = NSMakeRect(kPad + 2, (kHeader - 8) / 2, 8, 8);
     self.connect.frame = NSMakeRect(width - kPad - 92, (kHeader - 24) / 2, 92, 24);
-    self.provider.frame = NSMakeRect(kPad + 16, (kHeader - 24) / 2, MAX(80, NSMinX(self.connect.frame) - kPad - 24), 24);
+    self.clearButton.frame = NSMakeRect(NSMinX(self.connect.frame) - 30, (kHeader - 22) / 2, 24, 22);
+    self.provider.frame = NSMakeRect(kPad + 16, (kHeader - 24) / 2, MAX(80, NSMinX(self.clearButton.frame) - kPad - 22), 24);
     self.headerRule.frame = NSMakeRect(0, kHeader - 1, width, 1);
     // Status row: a spinner leads the text while the agent is working.
     BOOL working = self.agent.busy;
@@ -155,7 +167,10 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
     self.actionButton.frame = NSMakeRect(NSMaxX(self.composerField.frame) - kActionSize - 6,
                                          NSMaxY(self.composerField.frame) - kActionSize - 6, kActionSize, kActionSize);
     self.hint.frame = NSMakeRect(kPad + 2, height - kFooter + 3, inner - 4, 14);
-    CGFloat historyTop = kHeader + kStatus + 6;
+    CGFloat stripTop = kHeader + kStatus + 4, stripHeight = [self.audioStrip preferredHeight];
+    self.audioStrip.frame = NSMakeRect(0, stripTop, width, stripHeight);
+    [self.audioStrip resizeSubviewsWithOldSize:self.audioStrip.bounds.size];
+    CGFloat historyTop = stripTop + stripHeight + 4;
     self.historyScroll.frame = NSMakeRect(kPad, historyTop, inner, MAX(10, fieldTop - historyTop - 8));
     for (NSScrollView *scroll in @[self.historyScroll, self.composerScroll]) {
         NSTextView *view = (NSTextView *)scroll.documentView;
@@ -231,6 +246,7 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
     BOOL connected = self.agent.connected, busy = self.agent.busy;
     self.provider.enabled = !connected;
     self.connect.title = connected ? @"Disconnect" : @"Connect";
+    self.clearButton.enabled = !busy && (self.agent.messages.count > 0 || connected);
     NSColor *dot = !connected ? NSColor.tertiaryLabelColor : (busy ? NSColor.systemOrangeColor : (self.agent.ready ? NSColor.systemGreenColor : NSColor.systemYellowColor));
     self.statusDot.layer.backgroundColor = dot.CGColor;
     if (busy) [self.spinner startAnimation:nil]; else [self.spinner stopAnimation:nil];
@@ -262,6 +278,19 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
     if (flags & (NSEventModifierFlagShift | NSEventModifierFlagOption)) return NO;
     [self sendMessage:nil];
     return YES;
+}
+- (void)clearChat:(id)sender {
+    if (self.agent.busy) return;
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Clear this conversation?";
+    alert.informativeText = @"The agent starts a fresh session. Audio clips are kept.";
+    [alert addButtonWithTitle:@"Clear"]; [alert addButtonWithTitle:@"Cancel"];
+    alert.buttons[0].hasDestructiveAction = YES;
+    void (^done)(NSModalResponse) = ^(NSModalResponse response) {
+        if (response == NSAlertFirstButtonReturn) [self.agent clear];
+    };
+    if (self.window) [alert beginSheetModalForWindow:self.window completionHandler:done];
+    else done([alert runModal]);
 }
 - (void)connectAgent:(id)sender {
     if (self.agent.connected) [self.agent disconnect];

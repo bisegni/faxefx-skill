@@ -24,6 +24,10 @@ changed.
 | `src/agent/MCPServer.mm` | Private loopback MCP server exposing the Axe-Fx tools to Claude |
 | `src/editor/EditorTools.mm` | Tool schemas, system prompt, inspection and guarded mutations |
 | `src/editor/NativeBridge.mm` | Version-pinned native parameter writes through Axe-Edit's command path |
+| `src/ui/AudioStrip.mm` | Audio section: input picker, record/meter, import/drop, clip list |
+| `src/audio/AudioAnalysis.mm` | Local measurements and reference/current comparison (AVFoundation + Accelerate) |
+| `src/audio/AudioClips.mm`, `AudioRecorder.mm` | Clip library and capture from a chosen input |
+| `src/audio/AudioTools.mm` | Read-only agent tools: `axefx_audio_list/analyze/compare` |
 | `tests/` | Fixture tests run by `scripts/test` |
 
 The copied editor keeps Axe-Edit's ordinary device communications and may share

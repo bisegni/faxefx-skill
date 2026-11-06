@@ -12,4 +12,6 @@
 - (void)send:(NSString *)text;
 - (void)stop;
 - (void)disconnect;
+/// Clear the transcript and start a new provider session. NO while busy.
+- (BOOL)clear;
 @end

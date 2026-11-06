@@ -26,8 +26,10 @@ BUNDLE_ID = 'com.FractalAudio.AIIIEdit'
 EXECUTABLE = 'Axe-Edit III'
 SUPPORTED = {('1.15.03', '647ba24fb04c2cfcbcb972b32f338b0422eb87c90ca7898cf26f39e9c5bd8435')}
 DEFAULT_OUTPUT = Path.home() / 'Applications/Axe-Edit III Chat.app'
-SOURCES = ['src/ui/ChatDock.m', 'src/ui/ChatPanel.mm', 'src/agent/ChatAgent.mm',
-           'src/agent/MCPServer.mm', 'src/editor/EditorTools.mm', 'src/editor/NativeBridge.mm']
+SOURCES = ['src/ui/ChatDock.m', 'src/ui/ChatPanel.mm', 'src/ui/AudioStrip.mm', 'src/agent/ChatAgent.mm',
+           'src/agent/MCPServer.mm', 'src/editor/EditorTools.mm', 'src/editor/NativeBridge.mm',
+           'src/audio/AudioAnalysis.mm', 'src/audio/AudioClips.mm', 'src/audio/AudioRecorder.mm', 'src/audio/AudioTools.mm']
+FRAMEWORKS = ['Cocoa', 'AVFoundation', 'Accelerate', 'CoreMedia', 'UniformTypeIdentifiers']
 LAUNCHER = '''#!/bin/sh
 AXE_PROOF_MACOS_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 export DYLD_INSERT_LIBRARIES="$AXE_PROOF_MACOS_DIR/../Frameworks/AxeSidebarProof.dylib"
@@ -148,16 +150,18 @@ def main():
         library = staged / 'Contents/Frameworks/AxeSidebarProof.dylib'
         library.parent.mkdir(parents=True, exist_ok=True)
         say('Building the chat library…')
-        includes = [f'-I{ROOT / part}' for part in ('src/agent', 'src/editor', 'src/ui')]
+        includes = [f'-I{ROOT / part}' for part in ('src/agent', 'src/editor', 'src/ui', 'src/audio')]
         run('xcrun', 'clang++', '-dynamiclib', '-fobjc-arc', '-fblocks', '-std=c++17', '-x', 'objective-c++',
-            '-arch', 'arm64', '-arch', 'x86_64', '-mmacosx-version-min=12.0', '-framework', 'Cocoa',
+            '-arch', 'arm64', '-arch', 'x86_64', '-mmacosx-version-min=12.0',
+            *[flag for name in FRAMEWORKS for flag in ('-framework', name)],
             *includes, *[str(ROOT / source) for source in SOURCES], '-o', str(library))
         copy_binary.write_text(LAUNCHER)
         copy_binary.chmod(0o755)
         info_path = staged / 'Contents/Info.plist'
         info = plistlib.loads(info_path.read_bytes())
         info.update(CFBundleIdentifier='org.axestudio.axe-edit-chat', CFBundleName='Axe-Edit III Chat',
-                    CFBundleDisplayName='Axe-Edit III Chat')
+                    CFBundleDisplayName='Axe-Edit III Chat',
+                    NSMicrophoneUsageDescription='Record your guitar from an audio input (such as the Axe-Fx III USB audio) to compare your tone with a reference. Audio stays on this Mac.')
         info_path.write_bytes(plistlib.dumps(info))
         # Written before signing: any later change would invalidate the signature.
         manifest = {'app': str(output), 'source_app': str(app), 'source_version': version,

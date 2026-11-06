@@ -13,6 +13,8 @@ typedef void (^AxeToolReply)(NSDictionary *result);
 @property(nonatomic, weak) NSView *editor;
 /// Defaults to [AxeNativeBridge shared]; tests substitute a fixture writer.
 @property(nonatomic, strong) id<AxeParameterWriter> parameterWriter;
+/// Defaults to [AxeAudioClips shared]; tests substitute a temporary library.
+@property(nonatomic, strong) id audioClips;
 + (instancetype)shared;
 + (NSArray<NSDictionary *> *)specifications;
 + (NSString *)systemPrompt;

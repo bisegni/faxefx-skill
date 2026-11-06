@@ -48,7 +48,22 @@ Re-run it after pulling changes; it asks before replacing the previous copy.
 3. **Ask:** for example *"warmer clean for scene 2"* or *"set Amp 1 gain to
    6"*. Return sends; Shift-Return starts a new line. The spinner shows while
    the agent works, and the round button stops it.
-4. **Arrange:** drag the panel's edge to widen it. The title-bar icon detaches
+4. **Match a tone from audio:** open the **Audio** section under the status
+   line.
+   - **Import the reference:** click the file icon, or drop files onto it.
+     Ideally use isolated guitar.
+   - **Record your tone:** pick your input (the Axe-Fx III USB audio is
+     preselected when present), press ● and play the same part. Each clip
+     can be marked **Ref** or **Mine**.
+   - **Ask the agent:** for example *"compare my tone to the reference"*. It
+     measures both clips locally, explains the differences and proposes
+     specific knob changes. It applies them only after you agree, then asks
+     for a new take to compare again.
+   - **Privacy:** audio never leaves your Mac; the agent sees only numeric
+     measurements.
+5. **Start over:** the pencil icon starts a new chat with a fresh agent
+   session. Audio clips are kept.
+6. **Arrange:** drag the panel's edge to widen it. The title-bar icon detaches
    it into a free window and docks it back.
 
 ## Safety
@@ -77,9 +92,13 @@ reverse-engineering evidence behind native writes is in
 [`docs/AXE_EDIT_PARAMETER_UPDATE_HANDOFF.md`](docs/AXE_EDIT_PARAMETER_UPDATE_HANDOFF.md).
 Logs are in `~/Library/Logs/AxeEditSidebarProof.log`.
 
+macOS asks for microphone permission the first time you record. Re-running
+the patcher re-signs the copy, so macOS may ask again.
+
 ## Uninstall
 
 Delete `~/Applications/Axe-Edit III Chat.app`. Optionally also delete
-`~/Library/Application Support/AxeStudioEmbeddedChat/`.
+`~/Library/Application Support/AxeStudioEmbeddedChat/`, which holds chat
+history and audio clips.
 
 This project is not affiliated with Fractal Audio Systems.

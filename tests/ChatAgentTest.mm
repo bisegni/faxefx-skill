@@ -81,6 +81,14 @@ int main(int argc, const char **argv) {
         agent.stopping=YES;
         [agent codexEvent:@{@"id":@102,@"method":@"item/tool/call",@"params":@{@"threadId":@"tool-thread",@"turnId":@"tool-turn",@"tool":@"axefx_inspect",@"arguments":@{}}}];
         assert(agent.messages.count==count+1);
+        // Clear: refused while busy; otherwise empties messages and the saved session.
+        agent.busy=YES; assert(![agent clear] && agent.messages.count>0); agent.busy=NO;
+        agent.session=@"long-thread"; agent.connected=NO;
+        assert([agent clear] && agent.messages.count==0 && agent.session==nil);
+        NSData *saved=[NSData dataWithContentsOfURL:[agent.directory URLByAppendingPathComponent:@"conversation.json"]];
+        NSDictionary *state=[NSJSONSerialization JSONObjectWithData:saved options:0 error:nil];
+        assert([state[@"messages"] count]==0 && [state[@"session"] isEqual:@""]);
+        printf("PASS: clear chat refuses while busy, empties transcript and drops the provider session\n");
         printf("PASS: Codex/Claude streaming, final deduplication, foreign-thread rejection stopped-delta rejection and active-turn tool authorization\n");
     }
     return 0;

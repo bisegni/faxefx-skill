@@ -23,7 +23,7 @@ int main(void){@autoreleasepool{
     assert([request(server,nil,nil,list)[@"status"] integerValue]==403);
     assert([request(server,@"wrong",nil,list)[@"status"] integerValue]==403);
     assert([request(server,server.token,@"https://example.com",list)[@"status"] integerValue]==403);
-    NSDictionary *result=request(server,server.token,nil,list);assert([result[@"status"] integerValue]==200 && [result[@"body"][@"result"][@"tools"] count]==7 && calls==0);
+    NSDictionary *result=request(server,server.token,nil,list);assert([result[@"status"] integerValue]==200 && [result[@"body"][@"result"][@"tools"] count]==10 && calls==0);
     NSDictionary *call=@{@"jsonrpc":@"2.0",@"id":@2,@"method":@"tools/call",@"params":@{@"name":@"axefx_inspect",@"arguments":@{}}};
     result=request(server,server.token,nil,call);assert(calls==1 && ![result[@"body"][@"result"][@"isError"] boolValue]);
     NSString *oldToken=server.token;[server stop];

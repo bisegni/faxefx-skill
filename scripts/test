@@ -5,9 +5,10 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 OUT="$ROOT/.local/test-bin"
 mkdir -p "$OUT"
 cd "$ROOT"
-INC="-Isrc/agent -Isrc/editor -Isrc/ui"
-CXX="xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa $INC"
-CORE="src/editor/EditorTools.mm src/editor/NativeBridge.mm"
+INC="-Isrc/agent -Isrc/editor -Isrc/ui -Isrc/audio"
+CXX="xcrun clang++ -std=c++17 -fobjc-arc -fblocks -framework Cocoa -framework AVFoundation -framework Accelerate -framework CoreMedia -framework UniformTypeIdentifiers $INC"
+AUDIO="src/audio/AudioAnalysis.mm src/audio/AudioClips.mm src/audio/AudioTools.mm"
+CORE="src/editor/EditorTools.mm src/editor/NativeBridge.mm $AUDIO"
 
 run() { name="$1"; shift; echo "== $name"; "$@" -o "$OUT/$name"; "$OUT/$name"; }
 
@@ -15,5 +16,7 @@ run chat-dock      xcrun clang -fobjc-arc -fblocks -framework Cocoa $INC tests/C
 run editor-tools   $CXX tests/EditorToolsTest.mm $CORE
 run mcp-server     $CXX tests/MCPServerTest.mm src/agent/MCPServer.mm $CORE
 run chat-agent     $CXX tests/ChatAgentTest.mm src/agent/MCPServer.mm $CORE
-run chat-panel     $CXX tests/ChatPanelTest.mm src/agent/ChatAgent.mm src/agent/MCPServer.mm $CORE
+run chat-panel     $CXX tests/ChatPanelTest.mm src/agent/ChatAgent.mm src/agent/MCPServer.mm src/ui/AudioStrip.mm src/audio/AudioRecorder.mm $CORE
+run audio-analysis $CXX tests/AudioAnalysisTest.mm src/audio/AudioAnalysis.mm
+run audio-tools    $CXX tests/AudioToolsTest.mm $CORE
 echo "All native tests passed."
