@@ -19,6 +19,18 @@ static NSButton *trashOfRow(NSView *list, NSUInteger row) { return (NSButton *)l
 int main(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
+        NSDictionary *body = @{NSFontAttributeName:[NSFont systemFontOfSize:13]};
+        NSAttributedString *rendered = renderFencedMarkdown(@"Before\n```json\n  {\"gain\": 3}\n```\nAfter", body);
+        assert([rendered.string isEqual:@"Before\njson\n  {\"gain\": 3}\nAfter\n"]);
+        NSUInteger codeIndex = [rendered.string rangeOfString:@"  {"].location;
+        NSParagraphStyle *codeStyle = [rendered attribute:NSParagraphStyleAttributeName atIndex:codeIndex effectiveRange:NULL];
+        assert(codeStyle.textBlocks.count == 1);
+        assert(![rendered attribute:NSParagraphStyleAttributeName atIndex:rendered.length - 2 effectiveRange:NULL]);
+        NSAttributedString *streaming = renderFencedMarkdown(@"~~~\n  keep indentation\n```", body);
+        assert([streaming.string isEqual:@"  keep indentation\n```\n"]);
+        assert([renderFencedMarkdown(@"Use ``` inline", body).string isEqual:@"Use ``` inline\n"]);
+        assert([renderFencedMarkdown(@"````\n```\n````", body).string isEqual:@"```\n"]);
+        puts("PASS: fenced code styling, indentation, matching fences and unfinished streaming blocks");
         AxeChatPanel *panel = [[AxeChatPanel alloc] initWithFrame:NSMakeRect(0, 0, 300, 852)];
         for (NSNumber *height in @[@852, @550, @300, @852]) {
             panel.frame = NSMakeRect(0, 0, 300, height.doubleValue);

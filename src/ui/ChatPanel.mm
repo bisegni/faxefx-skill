@@ -40,6 +40,55 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
     scroll.documentView = view;
 }
 
+// Render fenced Markdown locally; code stays selectable native text, including
+// an unfinished fence while the agent is streaming its reply.
+static NSAttributedString *renderFencedMarkdown(NSString *text, NSDictionary *body) {
+    NSMutableAttributedString *out = [NSMutableAttributedString new];
+    NSArray<NSString *> *lines = [[text stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"] componentsSeparatedByString:@"\n"];
+    unichar marker = 0;
+    NSUInteger fenceLength = 0;
+    NSMutableDictionary *code = nil;
+    for (NSString *line in lines) {
+        NSUInteger indent = 0;
+        while (indent < line.length && [line characterAtIndex:indent] == ' ') ++indent;
+        NSString *trimmed = [line substringFromIndex:indent];
+        unichar first = trimmed.length ? [trimmed characterAtIndex:0] : 0;
+        NSUInteger count = 0;
+        if (first == '`' || first == '~')
+            while (count < trimmed.length && [trimmed characterAtIndex:count] == first) ++count;
+        NSString *info = [[trimmed substringFromIndex:count] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if (!marker && indent <= 3 && count >= 3 && (first != '`' || ![info containsString:@"`"])) {
+            marker = first; fenceLength = count;
+            NSTextTable *table = [NSTextTable new];
+            table.numberOfColumns = 1;
+            [table setValue:100 type:NSTextBlockValueTypePercentage forDimension:NSTextBlockWidth];
+            NSTextTableBlock *block = [[NSTextTableBlock alloc] initWithTable:table startingRow:0 rowSpan:1 startingColumn:0 columnSpan:1];
+            block.backgroundColor = fieldBackground();
+            [block setWidth:10 type:NSTextBlockValueTypeAbsolute forLayer:NSTextBlockPadding];
+            [block setWidth:1 type:NSTextBlockValueTypeAbsolute forLayer:NSTextBlockBorder];
+            [block setBorderColor:[NSColor colorWithWhite:1 alpha:0.10]];
+            NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
+            style.textBlocks = @[block];
+            style.lineSpacing = 2; style.paragraphSpacing = 0;
+            code = [@{NSFontAttributeName:[NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular],
+                NSForegroundColorAttributeName:NSColor.labelColor, NSParagraphStyleAttributeName:style} mutableCopy];
+            if (info.length) {
+                NSMutableDictionary *caption = [code mutableCopy];
+                caption[NSFontAttributeName] = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
+                caption[NSForegroundColorAttributeName] = NSColor.secondaryLabelColor;
+                [out appendAttributedString:[[NSAttributedString alloc] initWithString:[info stringByAppendingString:@"\n"] attributes:caption]];
+            }
+            continue;
+        }
+        if (marker && indent <= 3 && first == marker && count >= fenceLength && !info.length) {
+            marker = 0; code = nil;
+            continue;
+        }
+        [out appendAttributedString:[[NSAttributedString alloc] initWithString:[line stringByAppendingString:@"\n"] attributes:marker ? code : body]];
+    }
+    return out;
+}
+
 @interface AxeChatPanel () <NSTextViewDelegate>
 @property(nonatomic, strong) AxeChatAgent *agent;
 @property(nonatomic, strong) NSView *statusDot;
@@ -107,6 +156,7 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
         _history.editable = NO; _history.selectable = YES;
         _history.accessibilityLabel = @"Conversation";
         styleScroll(_historyScroll, _history, panelBackground(), NSMakeSize(4, 10));
+        _history.richText = YES;
 
         _composerField = [[NSView alloc] initWithFrame:NSZeroRect];
         _composerField.wantsLayer = YES;
@@ -219,13 +269,16 @@ static void styleScroll(NSScrollView *scroll, NSTextView *view, NSColor *backgro
         [out appendAttributedString:[[NSAttributedString alloc] initWithString:[name.uppercaseString stringByAppendingString:@"\n"] attributes:@{
             NSFontAttributeName:[NSFont systemFontOfSize:10 weight:NSFontWeightSemibold], NSKernAttributeName:@0.6,
             NSForegroundColorAttributeName:nameColor, NSParagraphStyleAttributeName:role}]];
-        NSString *text = [entry[@"text"] ?: @"" stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        NSString *text = entry[@"text"] ?: @"";
         NSDictionary *attributes = isTool
             ? @{NSFontAttributeName:[NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular],
                 NSForegroundColorAttributeName:NSColor.secondaryLabelColor, NSParagraphStyleAttributeName:tool}
             : @{NSFontAttributeName:[NSFont systemFontOfSize:13], NSForegroundColorAttributeName:NSColor.labelColor,
                 NSParagraphStyleAttributeName:body};
-        [out appendAttributedString:[[NSAttributedString alloc] initWithString:[text stringByAppendingString:@"\n"] attributes:attributes]];
+        if (isTool)
+            [out appendAttributedString:[[NSAttributedString alloc] initWithString:[text stringByAppendingString:@"\n"] attributes:attributes]];
+        else
+            [out appendAttributedString:renderFencedMarkdown(text, attributes)];
         if ([entry[@"status"] isEqual:@"interrupted"])
             [out appendAttributedString:[[NSAttributedString alloc] initWithString:@"Interrupted\n" attributes:@{
                 NSFontAttributeName:[NSFontManager.sharedFontManager convertFont:[NSFont systemFontOfSize:11] toHaveTrait:NSItalicFontMask],
